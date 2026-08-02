@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.8.0
+// @version      1.8.1
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @run-at       document-end
@@ -55,6 +55,11 @@
     const COMBAT_RANGE_IDEAL_CM = 12500;
     const COMBAT_RANGE_MAX_CM = 15000;
     const COMBAT_CLOSE_PROJECTILE_PRESSURE = 520;
+    // 常态巡航轻量弹道躲避：不进临时交战、不清金币路线。
+    // 压迫度或近弹距离超阈值时短暂横移，hold 结束后立刻恢复巡航。
+    const CRUISE_DODGE_PRESSURE = 380;
+    const CRUISE_DODGE_NEAR_CM = 12000;
+    const CRUISE_DODGE_HOLD_MS = 450;
     const AUTO_FIRE_RANGE_CM = 15000;
     const AUTO_FIRE_DEFAULT_PROJECTILE_SPEED_CMPS = 10000;
     const AUTO_FIRE_MAX_RATE_MS = 100;
@@ -786,6 +791,8 @@
         // 逃离锚点:持续被同一敌人逼近超 FLEE_ANCHOR_HOLD_MS 后,选一颗安全金币作为撤离目标顺路收币。
         // 锚点含坐标、设置时刻、目标敌人 key;敌人离开 170m 后由 step 主循环清掉。
         fleeAnchor: null,
+        // 常态巡航弹道躲避 hold 截止时刻；超时后恢复金币巡航。
+        cruiseDodgeUntil: 0,
         lastAction: "ready",
         lastError: "",
         log: [],
@@ -3046,6 +3053,7 @@
         clearHuntTarget();
         clearCoinRoute();
         runner.fleeAnchor = null;
+        runner.cruiseDodgeUntil = 0;
         runner.combatRisk = "clear";
         if (runner.timer) {
           clearInterval(runner.timer);
@@ -3201,6 +3209,47 @@
         return projectiles.length;
       }
 
+      // 常态巡航轻量弹道躲避：复用交战弹道预测数学，但不进 combatMode、不清 coin route。
+      // 仅在追杀/交战之外生效；压迫度低或子弹飞过后立刻还控制权给金币规划。
+      function handleCruiseProjectileDodge(me) {
+        if (runner.combatMode || runner.huntMode) return false;
+        const now = Date.now();
+        const projectiles = activeProjectiles(me, now);
+        const pressure = combatProjectilePressure(projectiles, me);
+        const near = projectiles.some(projectile => projectile.dist < CRUISE_DODGE_NEAR_CM);
+        const hot = pressure >= CRUISE_DODGE_PRESSURE || near;
+        if (hot) runner.cruiseDodgeUntil = now + CRUISE_DODGE_HOLD_MS;
+        if (!projectiles.length || (!hot && now >= (runner.cruiseDodgeUntil || 0))) {
+          if (!hot) runner.cruiseDodgeUntil = 0;
+          return false;
+        }
+
+        // 巡航躲避只看子弹，不维护交战距离带（spacing 传空）。
+        const dodge = chooseCombatDodge(me, projectiles, []);
+        const changed = dodge.dx !== (runner.lastCombatDodge && runner.lastCombatDodge.dx)
+          || dodge.dy !== (runner.lastCombatDodge && runner.lastCombatDodge.dy);
+        if (changed) runner.lastCombatSwitchAt = now;
+        runner.lastCombatDodge = dodge;
+        if (dodge.dx === 0 && dodge.dy === 0) {
+          setVelocity(0, 0);
+          runner.lastMoveMode = "cruise-dodge-hold";
+        } else {
+          setVelocity(dodge.dx, dodge.dy);
+          runner.lastMoveMode = "cruise-dodge";
+          setNavigationTarget(
+            Number(me.x) + dodge.dx * 8000,
+            Number(me.y) + dodge.dy * 8000,
+            "evade"
+          );
+        }
+        if (near) setDanger(true);
+        else setDanger(false);
+        runner.lastAction = "巡航躲弹：弹体 " + projectiles.length
+          + " 压迫 " + Math.round(pressure)
+          + (near ? " 近弹" : "");
+        return true;
+      }
+
       function handleCombatMode(me, hp) {
         if (!runner.combatMode) return false;
         setStepInterval(hp < COMBAT_FAST_CHECK_HP ? COMBAT_FAST_TICK_MS : (runner.autoFireMode ? AUTO_FIRE_LOOP_MS : STEP_TICK_MS));
@@ -3331,6 +3380,8 @@
           // 两类威胁都不在 170m/220m 范围内 → 已脱险,清掉撤离锚点状态,回到正常巡航/手动/金币规划。
           if (runner.fleeAnchor) runner.fleeAnchor = null;
 
+          if (handleCruiseProjectileDodge(me)) return;
+
           if (driveManualTarget(me, "前往")) return;
 
           let target = currentCoinRouteTarget(me, threats);
@@ -3419,6 +3470,7 @@
         clearAttackLock("停止脚本");
         runner.projectileMotion.clear();
         runner.fleeAnchor = null;
+        runner.cruiseDodgeUntil = 0;
         if (runner.timer) {
           clearInterval(runner.timer);
           runner.timer = 0;
