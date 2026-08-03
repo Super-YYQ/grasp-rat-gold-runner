@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.1
+// @version      1.9.2
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/*
@@ -55,7 +55,14 @@
     },
     setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); },
     readAck() { return gmGet(RECONNECT_KEY_ACK); },
-    clearAck() { gmDel(RECONNECT_KEY_ACK); }
+    clearAck() { gmDel(RECONNECT_KEY_ACK); },
+    // 冷却映射(ms):供游戏域名页算"距离开多久才能重连"
+    cooldownMs(type) {
+      return type === "damage" ? 0
+        : type === "lowhp" ? RECONNECT_COOLDOWN_LOWHP_MS
+        : type === "stamina" ? RECONNECT_COOLDOWN_STAMINA_MS
+        : -1;
+    }
   };
   // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用
   try {
@@ -63,13 +70,6 @@
     else window.__crgrReconnect = reconnectBridge;
   } catch (_) {
     try { window.__crgrReconnect = reconnectBridge; } catch (_e) {}
-  }
-
-  function classifyLeave(type, maxAgeMs) {
-    return type === "damage" ? 0
-      : type === "lowhp" ? RECONNECT_COOLDOWN_LOWHP_MS
-      : type === "stamina" ? RECONNECT_COOLDOWN_STAMINA_MS
-      : Number.isFinite(maxAgeMs) ? maxAgeMs : -1;
   }
 
   // 在授权页找"允许/授权"类按钮;优先按 LINUX DO Connect 实际页面结构
@@ -98,74 +98,126 @@
   }
 
   function oauthReconnectMain() {
+    // 授权页只做一件事:立刻找"允许"按钮点掉,把浏览器送回游戏。
+    // 等冷却这件事放在游戏域名页(更稳、不会因 OAuth 会话长时间挂起而失效),
+    // 不在这页等——避免"等待重连超时"式死等。
     try {
-      if (!reconnectBridge.readSwitch()) {
-        document.title = "[不自动重连] " + (document.title || "");
-        return;
-      }
       const rec = reconnectBridge.readLeave();
-      if (!rec) {
-        document.title = "[无离开记录·不重连] " + (document.title || "");
-        return;
-      }
-      if (rec.type === "manual" || rec.type === "other" || !rec.type) {
-        document.title = "[" + (rec.type || "unknown") + "·不重连] " + (document.title || "");
-        return;
-      }
-      // 防重复:若已对同一离开记录点过允许(ack 与当前 ts 一致),不再点
       const ack = gmGet(RECONNECT_KEY_ACK);
-      if (ack && rec.ts && String(ack) === String(rec.ts)) {
-        document.title = "[已重连过] " + (document.title || "");
+      // 防重复:已对同一离开记录点过允许就不再点(刷新授权页也安全)
+      if (ack && rec && rec.ts && String(ack) === String(rec.ts)) {
+        document.title = "[已重连过·不重复点] " + (document.title || "");
         return;
       }
-
       const baseTitle = document.title || "";
       const startedAt = Date.now();
-      const MAX_POLL_MS = 8 * 60 * 1000; // 最多轮询 8 分钟
+      const FIND_BTN_TIMEOUT_MS = 60 * 1000; // 找允许按钮最多重试 60 秒
       const poll = window.setInterval(() => {
         try {
-          const now = Date.now();
-          const cooldown = classifyLeave(rec.type);
-          if (cooldown < 0) {
-            document.title = "[未知离开类型·不重连] " + baseTitle;
-            clearInterval(poll);
-            return;
-          }
-          const dueAt = rec.ts + cooldown;
-          if (now < dueAt) {
-            const rem = dueAt - now;
-            const mm = String(Math.floor(rem / 60000)).padStart(2, "0");
-            const ss = String(Math.floor((rem % 60000) / 1000)).padStart(2, "0");
-            document.title = "[还需 " + mm + ":" + ss + " 重连] " + baseTitle;
-            if (now - startedAt > MAX_POLL_MS) {
-              clearInterval(poll);
-              document.title = "[重连等待超时·停止轮询] " + baseTitle;
-            }
-            return;
-          }
-          // 冷却到期,找允许按钮
           const btn = findAuthorizeButton();
-          if (!btn) {
-            document.title = "[等待授权页加载] " + baseTitle;
-            if (now - startedAt > MAX_POLL_MS) {
-              clearInterval(poll);
-              document.title = "[未找到允许按钮·停止轮询] " + baseTitle;
+          if (btn) {
+            gmSet(RECONNECT_KEY_ACK, (rec && rec.ts) || 0);
+            clearInterval(poll);
+            document.title = "[已点击允许·重连中] " + baseTitle;
+            try { btn.click(); } catch (_) {
+              try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
             }
             return;
           }
-          gmSet(RECONNECT_KEY_ACK, rec.ts || 0);
-          clearInterval(poll);
-          document.title = "[已点击允许·重连中] " + baseTitle;
-          try { btn.click(); } catch (_) {
-            try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
+          document.title = "[等待授权页加载·找允许] " + baseTitle;
+          if (Date.now() - startedAt > FIND_BTN_TIMEOUT_MS) {
+            clearInterval(poll);
+            document.title = "[60秒未找到允许按钮·停止] " + baseTitle;
           }
         } catch (_) {
-          // 单次轮询异常:静默,下一拍继续
+          // 单次异常:静默,下一拍继续
         }
-      }, 600);
+      }, 400);
     } catch (_) {
       // 静默返回,绝不抛到页面
     }
+  }
+
+  // 在游戏域名页(登出态)找"LinuxDo 登录"入口:优先 href 含 oauth2/authorize 的链接,
+  // 其次文字含 LinuxDo/linux.do/登录/Login 的可点元素;排除"离开/退出/退出登录"等负面。
+  function findLinuxDoLoginButton() {
+    const denyRe = /离开|退出|exit|sign\s*out|log\s*out|logout|disconnect|不登录|取消/;
+    // 1) 优先:实际 OAuth 跳转链接
+    try {
+      const links = document.querySelectorAll('a[href*="connect.linux.do"], a[href*="oauth2/authorize"]');
+      for (const a of links) {
+        const text = (a.innerText || a.textContent || "").trim().toLowerCase();
+        if (denyRe.test(text)) continue;
+        return a;
+      }
+    } catch (_) {}
+    // 2) 文字回退
+    const keywords = ["linuxdo", "linux.do", "登录", "login", "登入", "sign in", "connect"];
+    const candidates = Array.from(document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]"));
+    for (const el of candidates) {
+      const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
+      if (!text) continue;
+      if (denyRe.test(text)) continue;
+      if (keywords.some(k => text.includes(k.toLowerCase()))) return el;
+    }
+    return null;
+  }
+
+  // 登出态看护:游戏域名页 + DOM + GM,不依赖游戏变量。
+  // 防误触三条件须同时满足才会点登录跳授权页:开关开 + 合法离开记录 + 页面出现 LinuxDo 登录入口。
+  // 任意一条不满足(尤其正常挂机时登录入口不在场)→什么都不做,绝不自作主张戳登录。
+  function gameReconnectWatcher() {
+    if (!reconnectBridge.readSwitch()) return;
+    const baseTitle = document.title || "";
+    const POLL_MS = 1000;
+    let jumped = false;
+    const poll = window.setInterval(() => {
+      try {
+        if (jumped) { clearInterval(poll); return; }
+        const rec = reconnectBridge.readLeave();
+        if (!rec || !rec.ts) { return; } // 没离开记录:正常在玩/刚手动启动后被清,不管
+        if (rec.type !== "damage" && rec.type !== "lowhp" && rec.type !== "stamina") {
+          return; // manual/other/未知:不重连
+        }
+        const cd = reconnectBridge.cooldownMs(rec.type);
+        if (cd < 0) return;
+        const dueAt = rec.ts + cd;
+        const now = Date.now();
+        if (now < dueAt) {
+          // 冷却未到:只显示倒计时,不动作。但前提是确实在登出态——
+          // 若页面上没出现登录入口(可能已登录或在玩),就不动 title、不打扰
+          const loginBtn = findLinuxDoLoginButton();
+          if (!loginBtn) return; // 登录入口不在场:多半已登录正常玩,绝不干扰
+          const rem = dueAt - now;
+          const mm = String(Math.floor(rem / 60000)).padStart(2, "0");
+          const ss = String(Math.floor((rem % 60000) / 1000)).padStart(2, "0");
+          document.title = "[待重连·还需 " + mm + ":" + ss + "] " + baseTitle;
+          return;
+        }
+        // 冷却已到:在登出态才点登录跳授权页
+        const loginBtn = findLinuxDoLoginButton();
+        if (!loginBtn) return; // 没登录入口:不点,等人来或下个 tick 再看
+        try {
+          // 优先用真实跳转链接 href 直接导航,比 click 更稳
+          const href = loginBtn.getAttribute && loginBtn.getAttribute("href");
+          jumped = true;
+          document.title = "[冷却到期·跳授权页] " + baseTitle;
+          if (href && !/^javascript:/i.test(href)) {
+            clearInterval(poll);
+            location.href = href;
+          } else {
+            clearInterval(poll);
+            try { loginBtn.click(); } catch (_) {
+              loginBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            }
+          }
+        } catch (_) {
+          jumped = false; // 点失败下个 tick 再试
+        }
+      } catch (_) {
+        // 单次异常:静默继续
+      }
+    }, POLL_MS);
   }
 
   // 域名分流:授权页只跑轻量重连逻辑,绝不注入 pageMain
@@ -175,6 +227,14 @@
   }
   // 其它非游戏域名不注入(如误装到别处)
   if (location.hostname !== "grasp-rat-game.h-e.top") return;
+
+  // 游戏域名页:登出态下"等冷却 + 到期点 LinuxDo 登录跳授权页"的轻量看护。
+  // 与 pageMain(登录态挂机)共存于同一页,互不依赖:它只靠 DOM + GM 记录,
+  // 不读 state/els。pageMain 在登录态 ready() 后照常 setup。
+  // 关键防误触:只有当(重连开关开)且(读到合法离开记录 type∈damage/lowhp/stamina)
+  // 且(页面当前出现了 LinuxDo 登录入口=未登录态)才行动。
+  // 正常挂机时游戏已登录、登录入口不在场,本看护什么都不做。
+  try { gameReconnectWatcher(); } catch (_) {}
 
   const code = `(${pageMain.toString()})();`;
 
