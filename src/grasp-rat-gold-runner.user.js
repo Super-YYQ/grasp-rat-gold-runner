@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.8.1
+// @version      1.8.2
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @run-at       document-end
@@ -38,8 +38,12 @@
     const RICH_ENEMY_ESCAPE_CM = 17000;
     // 逃离两阶段:刚触发 170m 逃离时纯反向拉开(避免路过的玩家引发一过性抖动);
     // 同一敌人持续逼近超过此 hold 时长、仍 170m 内,才转去逃向一颗“安全金币锚点”顺路收币。
+    // 锚点到达或超过 max 寿命后立刻换下一颗/回纯反向,避免在同一金币点原地转圈。
     const FLEE_ANCHOR_HOLD_MS = 1500;
+    const FLEE_ANCHOR_MAX_MS = 3500;
     const FLEE_ANCHOR_SAFE_RADIUS_CM = 19000;
+    // 金币拾取半径:八向移动步长较大时,过小的 stop 阈值会在金币周边来回超调转圈。
+    const COIN_REACHED_CM = 160;
     const ENEMY_LINE_SCAN_CM = 50000;
     const ENEMY_LINE_MIN_DROP = 1;
     const COMBAT_SCAN_CM = 17000;
@@ -91,6 +95,10 @@
     const ROUTE_LENGTH_PENALTY_START_CM = 30000;
     const ROUTE_LENGTH_PENALTY_PER_CM = 0.000018;
     const ROUTE_LENGTH_PENALTY_FLOOR = 0.5;
+    // 首段路程偏好:第一颗金币在 near 内不打折;超过 far 软阈值压到 floor,抑制“突然冲很远的一颗”。
+    const ROUTE_NEAR_PREFER_CM = 12000;
+    const ROUTE_FAR_SOFT_CM = 35000;
+    const ROUTE_FAR_FACTOR_FLOOR = 0.28;
     const DROP_LEADERBOARD_REFRESH_MS = 10000;
     const DROP_LEADERBOARD_ENTRY_REFRESH_DELAY_MS = 3000;
     const STEP_TICK_MS = 150;
@@ -2269,9 +2277,18 @@
         return sum;
       }
 
+      function routeFirstLegPreferFactor(firstLegCm) {
+        const dist = Number(firstLegCm) || 0;
+        if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
+        if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
+        const t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
+        return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
+      }
+
       function scoreDrop(drop, me, threats, candidates) {
         const amount = dropAmount(drop);
         const seconds = travelSeconds(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y));
+        const firstLeg = Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y));
         const cluster = dropClusterValue(drop, candidates);
         const targetSafety = minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats);
         const midSafety = minRichEnemyDistanceAt(
@@ -2285,7 +2302,7 @@
           ? 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM))
           : 1;
         const sameTargetBias = Number(drop.drop_id) === Number(runner.targetId) ? 1.12 : 1;
-        return ((amount + cluster) / (seconds + 1.6)) * safetyFactor * sameTargetBias;
+        return ((amount + cluster) / (seconds + 1.6)) * safetyFactor * sameTargetBias * routeFirstLegPreferFactor(firstLeg);
       }
 
       function routeClusterStats(drop, candidates) {
@@ -2432,7 +2449,13 @@
         const lengthExcessCm = Math.max(0, totalLegCm - ROUTE_LENGTH_PENALTY_START_CM);
         const lengthFactorBase = 1 - ROUTE_LENGTH_PENALTY_PER_CM * lengthExcessCm;
         const lengthFactor = Math.max(ROUTE_LENGTH_PENALTY_FLOOR, lengthFactorBase);
-        const score = ((totalValue + densityBonus) / (totalSeconds + 1.4)) * minSafetyFactor * countBonus * sameRouteBias * lengthFactor;
+        // 首段偏好:第一颗金币很远时再压一档,避免高金额/金团密度把脚本拽到远处。
+        const firstLegCm = route.length
+          ? Math.hypot(Number(route[0].x) - Number(me.x), Number(route[0].y) - Number(me.y))
+          : 0;
+        const firstLegFactor = routeFirstLegPreferFactor(firstLegCm);
+        const score = ((totalValue + densityBonus) / (totalSeconds + 1.4))
+          * minSafetyFactor * countBonus * sameRouteBias * lengthFactor * firstLegFactor;
         return {
           ids,
           target: route[0],
@@ -2549,12 +2572,17 @@
 
       // 选一颗“安全金币锚点”作为撤离目标:离自己近、离当前威胁远,且远离所有 170m 逃离威胁敌人。
       // 用于两阶段撤离的“稳态撤离”阶段——逃离顺路收币,避免纯反向来回横跳空耗体力。
-      function safeFleeAnchor(me, enemy, escapeThreats) {
+      // excludeId 用于到达/过期后排除当前金币,避免在同一点原地转圈。
+      function safeFleeAnchor(me, enemy, escapeThreats, excludeId) {
         const drops = Array.isArray(state.coinDrops) ? state.coinDrops : [];
         if (!drops.length) return null;
         const threats = Array.isArray(escapeThreats) && escapeThreats.length ? escapeThreats : [];
+        const awayX = Number(me.x) - Number(enemy.x);
+        const awayY = Number(me.y) - Number(enemy.y);
+        const awayLen = Math.hypot(awayX, awayY) || 1;
         let best = null;
         for (const drop of drops) {
+          if (excludeId != null && Number(drop.drop_id) === Number(excludeId)) continue;
           const dx = Number(drop.x);
           const dy = Number(drop.y);
           if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
@@ -2569,9 +2597,12 @@
           const distToMe = Math.hypot(dx - Number(me.x), dy - Number(me.y));
           const distToEnemy = Math.hypot(dx - Number(enemy.x), dy - Number(enemy.y));
           if (!Number.isFinite(distToMe) || !Number.isFinite(distToEnemy)) continue;
-          // 评分:离自己越近越好(分子小)、离当前敌人越远越好(分母大)。同时回退极端远(>5000m)忽略。
+          // 评分:离自己越近越好、离当前敌人越远越好;再加半平面偏置,偏好继续远离敌人的方向。
           if (distToMe > 500000) continue;
-          const score = (distToEnemy + 1) / (distToMe + 1);
+          const toDropX = dx - Number(me.x);
+          const toDropY = dy - Number(me.y);
+          const align = (awayX * toDropX + awayY * toDropY) / awayLen;
+          const score = (distToEnemy + 1) / (distToMe + 1) + Math.max(0, align) / 20000;
           if (!best || score > best.score) {
             best = { x: dx, y: dy, drop_id: drop.drop_id, score, distToMe, distToEnemy };
           }
@@ -2585,29 +2616,46 @@
         // 撤离阶段状态:
         //   - 无状态或换了威胁敌人 → 进入“纯反向撤离”阶段,记录开始时刻(1.5s 内纯反向拉开,避免路过者抖动)。
         //   - 同敌人持续逼近超 hold 仍未摆脱 → 转向“安全金币锚点”稳态撤离顺路收币。
-        //   - 锚点阶段仍以同一敌人持续逼近 → 维持锚点撤离;敌人离开 170m 由主循环清状态。
+        //   - 锚点到达/过期 → 排除当前金币换下一颗;没有下一颗则回纯反向,绝不在同一点原地转圈。
         let evade = runner.fleeAnchor;
         const sameEnemy = evade && evade.key && evade.key === key;
         if (!sameEnemy) {
-          evade = { key, startedAt: now, x: null, y: null };
-        } else if (!evade.x) {
-          // 仍在纯反向阶段:是否到点该转锚点了。
+          evade = { key, startedAt: now, x: null, y: null, drop_id: null, anchorAt: 0 };
+        } else {
           evade = { ...evade };
         }
-        // decides 阶段:纯反向 vs 锚点
-        const inReversePhase = !evade.x; // true 表示还没设锚点(纯反向阶段)
-        const shouldTryAnchor = inReversePhase && (now - evade.startedAt) >= FLEE_ANCHOR_HOLD_MS;
-        if (shouldTryAnchor) {
+
+        const trySetAnchor = (excludeId) => {
           const escapeThreats = escapeEnemies(me, RICH_ENEMY_ESCAPE_CM);
-          const safeAnchor = safeFleeAnchor(me, enemy, escapeThreats);
+          const safeAnchor = safeFleeAnchor(me, enemy, escapeThreats, excludeId);
           if (safeAnchor) {
-            evade = { ...evade, x: Number(safeAnchor.x), y: Number(safeAnchor.y), drop_id: safeAnchor.drop_id, anchorAt: now };
+            return {
+              key,
+              startedAt: evade.startedAt || now,
+              x: Number(safeAnchor.x),
+              y: Number(safeAnchor.y),
+              drop_id: safeAnchor.drop_id,
+              anchorAt: now
+            };
           }
+          return null;
+        };
+
+        if (evade.x != null) {
+          const distToAnchor = Math.hypot(Number(evade.x) - Number(me.x), Number(evade.y) - Number(me.y));
+          const stale = evade.anchorAt && (now - evade.anchorAt) >= FLEE_ANCHOR_MAX_MS;
+          if (distToAnchor <= COIN_REACHED_CM || stale) {
+            const refreshed = trySetAnchor(evade.drop_id);
+            evade = refreshed || { key, startedAt: now, x: null, y: null, drop_id: null, anchorAt: 0 };
+          }
+        } else if ((now - evade.startedAt) >= FLEE_ANCHOR_HOLD_MS) {
+          const anchored = trySetAnchor(null);
+          if (anchored) evade = anchored;
         }
         runner.fleeAnchor = evade;
 
         let label;
-        if (evade.x) {
+        if (evade.x != null) {
           // 锚点撤离阶段
           moveToward(Number(evade.x) - Number(me.x), Number(evade.y) - Number(me.y));
           setNavigationTarget(Number(evade.x), Number(evade.y), "evade");
@@ -3417,7 +3465,7 @@
           const ry = Number(target.y) - Number(me.y);
           const dist = Math.hypot(rx, ry);
 
-          if (dist < 45) {
+          if (dist <= COIN_REACHED_CM) {
             stopMove();
             runner.lastAction = "贴近金币 " + runner.targetId + "，等待入账";
             return;

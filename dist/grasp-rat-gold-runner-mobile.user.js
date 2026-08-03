@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner Mobile
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Mobile-focused Grasp Rat helper with long-press target, compact controls, hunt drawer, and fire lock drawer.
 // @match        https://grasp-rat-game.h-e.top/*
 // @run-at       document-end
@@ -77,10 +77,22 @@
     const ROUTE_MAX_POINTS_SPARSE = 2;
     const ROUTE_SWITCH_FACTOR = 1.14;
     const REPLAN_MS = 1800;
+    // 路线总长软折扣 + 首段路程偏好,减少突然冲远处金币。
+    const ROUTE_LENGTH_PENALTY_START_CM = 30000;
+    const ROUTE_LENGTH_PENALTY_PER_CM = 0.000018;
+    const ROUTE_LENGTH_PENALTY_FLOOR = 0.5;
+    const ROUTE_NEAR_PREFER_CM = 12000;
+    const ROUTE_FAR_SOFT_CM = 35000;
+    const ROUTE_FAR_FACTOR_FLOOR = 0.28;
     const DROP_LEADERBOARD_REFRESH_MS = 30000;
     const STEP_TICK_MS = 150;
     const COMBAT_FAST_TICK_MS = 50;
     const AXIS_DOMINANCE_RATIO = 1.65;
+    // 八向移动时间估算:斜对角 35cm/tick、沿轴 42cm/tick,避免远斜向金币被高估。
+    const TRAVEL_TICK_DIAGONAL_DIV = 35;
+    const TRAVEL_TICK_AXIS_DIV = 42;
+    // 金币拾取半径:八向步长较大时,过小 stop 阈值会在金币周边来回超调转圈。
+    const COIN_REACHED_CM = 160;
     const HUNT_REACHED_CM = 260;
     const HUNT_LOST_MEMORY_MS = 12000;
     const HUNT_PREDICT_MIN_MS = 350;
@@ -2088,7 +2100,7 @@
         const ay = Math.abs(Number(toY) - Number(fromY));
         const diagonal = Math.min(ax, ay);
         const axis = Math.max(ax, ay) - diagonal;
-        return diagonal / 35 + axis / 50;
+        return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
       }
 
       function dropAmount(drop) {
@@ -2112,9 +2124,18 @@
         return sum;
       }
 
+      function routeFirstLegPreferFactor(firstLegCm) {
+        const dist = Number(firstLegCm) || 0;
+        if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
+        if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
+        const t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
+        return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
+      }
+
       function scoreDrop(drop, me, threats, candidates) {
         const amount = dropAmount(drop);
         const seconds = travelSeconds(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y));
+        const firstLeg = Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y));
         const cluster = dropClusterValue(drop, candidates);
         const targetSafety = minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats);
         const midSafety = minRichEnemyDistanceAt(
@@ -2128,7 +2149,7 @@
           ? 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM))
           : 1;
         const sameTargetBias = Number(drop.drop_id) === Number(runner.targetId) ? 1.12 : 1;
-        return ((amount + cluster) / (seconds + 1.6)) * safetyFactor * sameTargetBias;
+        return ((amount + cluster) / (seconds + 1.6)) * safetyFactor * sameTargetBias * routeFirstLegPreferFactor(firstLeg);
       }
 
       function routeClusterStats(drop, candidates) {
@@ -2237,6 +2258,7 @@
         let prevDy = 0;
         let totalValue = 0;
         let totalSeconds = 0;
+        let totalLegCm = 0;
         let minSafetyFactor = 1;
 
         for (let step = 0; step < maxPoints; step += 1) {
@@ -2253,6 +2275,7 @@
           remaining.delete(Number(next.drop.drop_id));
           totalValue += next.drop.amountValue;
           totalSeconds += next.seconds;
+          totalLegCm += Number(next.legDist) || 0;
           minSafetyFactor = Math.min(minSafetyFactor, next.safetyFactor);
           currentX = Number(next.drop.x);
           currentY = Number(next.drop.y);
@@ -2269,7 +2292,15 @@
         const countBonus = 1 + Math.min(0.18, (route.length - 1) * 0.045);
         const sameRouteBias = ids[0] === Number(runner.targetId) ? 1.08 : 1;
         const kind = route.length >= 3 ? "cluster" : route.length === 2 ? "pair" : "single";
-        const score = ((totalValue + densityBonus) / (totalSeconds + 1.4)) * minSafetyFactor * countBonus * sameRouteBias;
+        const lengthExcessCm = Math.max(0, totalLegCm - ROUTE_LENGTH_PENALTY_START_CM);
+        const lengthFactorBase = 1 - ROUTE_LENGTH_PENALTY_PER_CM * lengthExcessCm;
+        const lengthFactor = Math.max(ROUTE_LENGTH_PENALTY_FLOOR, lengthFactorBase);
+        const firstLegCm = route.length
+          ? Math.hypot(Number(route[0].x) - Number(me.x), Number(route[0].y) - Number(me.y))
+          : 0;
+        const firstLegFactor = routeFirstLegPreferFactor(firstLegCm);
+        const score = ((totalValue + densityBonus) / (totalSeconds + 1.4))
+          * minSafetyFactor * countBonus * sameRouteBias * lengthFactor * firstLegFactor;
         return {
           ids,
           target: route[0],
@@ -2277,6 +2308,7 @@
           score,
           value: totalValue,
           travelSeconds: totalSeconds,
+          travelCm: totalLegCm,
           kind
         };
       }
@@ -3110,7 +3142,7 @@
           const ry = Number(target.y) - Number(me.y);
           const dist = Math.hypot(rx, ry);
 
-          if (dist < 45) {
+          if (dist <= COIN_REACHED_CM) {
             stopMove();
             runner.lastAction = "贴近金币 " + runner.targetId + "，等待入账";
             return;
