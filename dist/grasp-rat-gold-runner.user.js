@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.2
+// @version      1.9.3
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/*
@@ -138,11 +138,17 @@
     }
   }
 
-  // 在游戏域名页(登出态)找"LinuxDo 登录"入口:优先 href 含 oauth2/authorize 的链接,
-  // 其次文字含 LinuxDo/linux.do/登录/Login 的可点元素;排除"离开/退出/退出登录"等负面。
+  // 在游戏域名页(登出态)找"LinuxDO 登录"入口:
+  // 优先精确锚定 #joinBtn(游戏页真实结构 <button class="join" id="joinBtn">LinuxDO 登录),
+  // 再找 href 含 connect.linux.do/oauth2/authorize 的跳转链接,最后文字回退。
   function findLinuxDoLoginButton() {
     const denyRe = /离开|退出|exit|sign\s*out|log\s*out|logout|disconnect|不登录|取消/;
-    // 1) 优先:实际 OAuth 跳转链接
+    // 1) 精确:游戏页真实按钮 id
+    try {
+      const btn = document.getElementById("joinBtn");
+      if (btn) return btn;
+    } catch (_) {}
+    // 2) 实际 OAuth 跳转链接
     try {
       const links = document.querySelectorAll('a[href*="connect.linux.do"], a[href*="oauth2/authorize"]');
       for (const a of links) {
@@ -151,7 +157,7 @@
         return a;
       }
     } catch (_) {}
-    // 2) 文字回退
+    // 3) 文字回退
     const keywords = ["linuxdo", "linux.do", "登录", "login", "登入", "sign in", "connect"];
     const candidates = Array.from(document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]"));
     for (const el of candidates) {
