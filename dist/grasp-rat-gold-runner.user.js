@@ -1,15 +1,171 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.8.2
+// @version      1.9.0
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
+// @match        https://connect.linux.do/*
 // @run-at       document-end
 // @grant        unsafeWindow
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
 // ==/UserScript==
 
 (function () {
   "use strict";
+
+  // ---------- OAuth 授权页自动重连入口 ----------
+  // 离开游戏后浏览器跳转到 connect.linux.do 授权页,需要在那个域名上也注入一段
+  // 轻量逻辑:读离开记录 -> 按类型算冷却 -> 冷却到期后自动点"允许"重回游戏。
+  // 因 pageMain 运行在页面上下文(unsafeWindow.eval),访问不到 GM_* API,所以离开记录
+  // 的读写由本 IIFE 顶层(userscript 沙盒)负责,并通过 window 暴露桥接给 pageMain 调用。
+  const RECONNECT_COOLDOWN_LOWHP_MS = 30 * 60 * 1000;
+  const RECONNECT_COOLDOWN_STAMINA_MS = 60 * 60 * 1000;
+  const RECONNECT_CRITICAL_HP = 25; // 与 pageMain 内 COMBAT_CRITICAL_HP 保持一致
+  const RECONNECT_KEY_LEAVE = "crgrLeaveRecord";
+  const RECONNECT_KEY_ACK = "crgrReconnectAck";
+  const RECONNECT_KEY_SWITCH = "crgrAutoReconnect";
+
+  function gmGet(key) {
+    try {
+      if (typeof GM_getValue === "function") return GM_getValue(key);
+    } catch (_) {}
+    return undefined;
+  }
+  function gmSet(key, val) {
+    try {
+      if (typeof GM_setValue === "function") GM_setValue(key, val);
+    } catch (_) {}
+  }
+  function gmDel(key) {
+    try {
+      if (typeof GM_deleteValue === "function") GM_deleteValue(key);
+    } catch (_) {}
+  }
+
+  // pageMain(页面上下文)通过该桥读写离开记录与重连开关;实现都在 userscript 沙盒。
+  const reconnectBridge = {
+    readLeave() { return gmGet(RECONNECT_KEY_LEAVE) || null; },
+    writeLeave(rec) { gmSet(RECONNECT_KEY_LEAVE, rec); },
+    clearLeave() { gmDel(RECONNECT_KEY_LEAVE); },
+    readSwitch() {
+      const v = gmGet(RECONNECT_KEY_SWITCH);
+      return v === false ? false : true; // 默认 true
+    },
+    setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); }
+  };
+  // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用
+  try {
+    if (typeof unsafeWindow !== "undefined") unsafeWindow.__crgrReconnect = reconnectBridge;
+    else window.__crgrReconnect = reconnectBridge;
+  } catch (_) {
+    try { window.__crgrReconnect = reconnectBridge; } catch (_e) {}
+  }
+
+  function classifyLeave(type, maxAgeMs) {
+    return type === "damage" ? 0
+      : type === "lowhp" ? RECONNECT_COOLDOWN_LOWHP_MS
+      : type === "stamina" ? RECONNECT_COOLDOWN_STAMINA_MS
+      : Number.isFinite(maxAgeMs) ? maxAgeMs : -1;
+  }
+
+  // 在授权页找"允许/授权"类按钮;容错多种文案与语言
+  function findAuthorizeButton() {
+    const keywords = ["允许", "authorize", "accept", "approve", "继续", "continue", "确认", "同意", "allow", "grant"];
+    const candidates = Array.from(
+      document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]")
+    );
+    for (const el of candidates) {
+      const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
+      if (!text) continue;
+      if (keywords.some(k => text.includes(k.toLowerCase()))) {
+        // 跳过明显的"拒绝/取消"等负面按钮
+        if (/拒绝|取消|deny|cancel|拒绝授权|decline|reject/.test(text)) continue;
+        return el;
+      }
+    }
+    return null;
+  }
+
+  function oauthReconnectMain() {
+    try {
+      if (!reconnectBridge.readSwitch()) {
+        document.title = "[不自动重连] " + (document.title || "");
+        return;
+      }
+      const rec = reconnectBridge.readLeave();
+      if (!rec) {
+        document.title = "[无离开记录·不重连] " + (document.title || "");
+        return;
+      }
+      if (rec.type === "manual" || rec.type === "other" || !rec.type) {
+        document.title = "[" + (rec.type || "unknown") + "·不重连] " + (document.title || "");
+        return;
+      }
+      // 防重复:若已对同一离开记录点过允许(ack 与当前 ts 一致),不再点
+      const ack = gmGet(RECONNECT_KEY_ACK);
+      if (ack && rec.ts && String(ack) === String(rec.ts)) {
+        document.title = "[已重连过] " + (document.title || "");
+        return;
+      }
+
+      const baseTitle = document.title || "";
+      const startedAt = Date.now();
+      const MAX_POLL_MS = 8 * 60 * 1000; // 最多轮询 8 分钟
+      const poll = window.setInterval(() => {
+        try {
+          const now = Date.now();
+          const cooldown = classifyLeave(rec.type);
+          if (cooldown < 0) {
+            document.title = "[未知离开类型·不重连] " + baseTitle;
+            clearInterval(poll);
+            return;
+          }
+          const dueAt = rec.ts + cooldown;
+          if (now < dueAt) {
+            const rem = dueAt - now;
+            const mm = String(Math.floor(rem / 60000)).padStart(2, "0");
+            const ss = String(Math.floor((rem % 60000) / 1000)).padStart(2, "0");
+            document.title = "[还需 " + mm + ":" + ss + " 重连] " + baseTitle;
+            if (now - startedAt > MAX_POLL_MS) {
+              clearInterval(poll);
+              document.title = "[重连等待超时·停止轮询] " + baseTitle;
+            }
+            return;
+          }
+          // 冷却到期,找允许按钮
+          const btn = findAuthorizeButton();
+          if (!btn) {
+            document.title = "[等待授权页加载] " + baseTitle;
+            if (now - startedAt > MAX_POLL_MS) {
+              clearInterval(poll);
+              document.title = "[未找到允许按钮·停止轮询] " + baseTitle;
+            }
+            return;
+          }
+          gmSet(RECONNECT_KEY_ACK, rec.ts || 0);
+          clearInterval(poll);
+          document.title = "[已点击允许·重连中] " + baseTitle;
+          try { btn.click(); } catch (_) {
+            try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
+          }
+        } catch (_) {
+          // 单次轮询异常:静默,下一拍继续
+        }
+      }, 600);
+    } catch (_) {
+      // 静默返回,绝不抛到页面
+    }
+  }
+
+  // 域名分流:授权页只跑轻量重连逻辑,绝不注入 pageMain
+  if (location.hostname === "connect.linux.do" || location.hostname.endsWith(".connect.linux.do")) {
+    try { oauthReconnectMain(); } catch (_) {}
+    return;
+  }
+  // 其它非游戏域名不注入(如误装到别处)
+  if (location.hostname !== "grasp-rat-game.h-e.top") return;
 
   const code = `(${pageMain.toString()})();`;
 
@@ -205,6 +361,7 @@
         '      <button type="button" data-crgr="start">启动</button>',
         '      <button type="button" data-crgr="stop">停止</button>',
         '      <button type="button" data-crgr="combat">临时交战</button>',
+        '      <button type="button" data-crgr="reconnect">重连 ON</button>',
         '      <button type="button" data-crgr="leave">离开</button>',
         '    </div>',
         '    <pre data-crgr="status">READY</pre>',
@@ -589,6 +746,12 @@
         #${PANEL_ID} button[data-crgr="stop"] { border-color: rgba(251, 191, 36, .45); color: #fde68a; }
         #${PANEL_ID} button[data-crgr="combat"] { border-color: rgba(248, 113, 113, .42); color: #fecaca; }
         #${PANEL_ID} button[data-crgr="hunt"] { border-color: rgba(250, 204, 21, .42); color: #fef3c7; }
+        #${PANEL_ID} button[data-crgr="reconnect"] { border-color: rgba(74, 222, 128, .42); color: #bbf7d0; }
+        #${PANEL_ID} button[data-crgr="reconnect"].active {
+          color: #f0fdf4;
+          background: rgba(20, 83, 45, .42);
+          box-shadow: inset 0 0 18px rgba(74, 222, 128, .14), 0 0 18px rgba(74, 222, 128, .08);
+        }
         #${PANEL_ID} button[data-crgr="combat"].active {
           color: #fff7ed;
           background: rgba(127, 29, 29, .42);
@@ -709,6 +872,7 @@
         combat: root.querySelector('[data-crgr="combat"]'),
         autoFire: root.querySelector('[data-crgr="auto-fire"]'),
         leave: root.querySelector('[data-crgr="leave"]'),
+        reconnect: root.querySelector('[data-crgr="reconnect"]'),
         collapse: root.querySelector('[data-crgr="collapse"]'),
         mode: root.querySelector('[data-crgr="mode"]'),
         action: root.querySelector('[data-crgr="action"]'),
@@ -793,6 +957,7 @@
         leaves: 0,
         avoidances: 0,
         hourlyLimitLeaveTriggered: false,
+        autoReconnect: true,
         lastThreat: null,
         enemyMotion: new Map(),
         projectileMotion: new Map(),
@@ -810,6 +975,14 @@
       };
 
       window[RUNNER_KEY] = runner;
+
+      // 从 userscript 桥读取自动重连开关(持久化在 GM,跨域共享),默认开
+      try {
+        const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+        if (bridge && typeof bridge.readSwitch === "function") {
+          runner.autoReconnect = bridge.readSwitch();
+        }
+      } catch (_) {}
 
       const nowText = () => new Date().toLocaleTimeString();
       const push = message => {
@@ -1012,6 +1185,16 @@
 
       function toggleHuntMode() {
         setHuntMode(!runner.huntMode, "manual");
+      }
+
+      function toggleReconnect() {
+        runner.autoReconnect = runner.autoReconnect === false ? true : false;
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (bridge && typeof bridge.setSwitch === "function") bridge.setSwitch(runner.autoReconnect);
+        } catch (_) {}
+        push(runner.autoReconnect ? "自动重连已开启" : "自动重连已关闭");
+        renderStatus();
       }
 
       function driveManualTarget(me, label, options) {
@@ -3085,6 +3268,48 @@
         return true;
       }
 
+      // 记录离开信息,供授权页(connect.linux.do)上的脚本据此算冷却决定是否自动重连。
+      // type: manual=手动不重连 / stamina=1h体力耗尽 / lowhp=掉血且离开时HP≤25 /
+      //       damage=掉血但HP>25 / other=兜底不重连。开关关闭时仍写记录便于排查,
+      //       但授权页会读到开关并直接不点允许。
+      function recordLeave(reason, me) {
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (!bridge || typeof bridge.writeLeave !== "function") return;
+          let type = "other";
+          if (reason === "manual") {
+            type = "manual";
+          } else if (runner.hourlyLimitLeaveTriggered && /1h体力限制/.test(String(reason || ""))) {
+            type = "stamina";
+          } else {
+            const hp = me ? Number(me.hp || 0) : NaN;
+            if (Number.isFinite(hp)) {
+              type = hp <= COMBAT_CRITICAL_HP ? "lowhp" : "damage";
+            } else {
+              type = "damage";
+            }
+          }
+          bridge.writeLeave({
+            ts: Date.now(),
+            type,
+            hp: me ? Number(me.hp || 0) : null,
+            reason: String(reason || ""),
+            enabled: runner.autoReconnect !== false,
+            v: 1
+          });
+        } catch (_) {
+          // 写记录失败不影响离开本身
+        }
+      }
+
+      function clearLeaveIfRejoined() {
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (!bridge || typeof bridge.clearLeave !== "function") return;
+          bridge.clearLeave();
+        } catch (_) {}
+      }
+
       function clickLeave(reason) {
         stopMove();
         setDanger(false);
@@ -3096,6 +3321,8 @@
         runner.autoFireStatus = "OFF";
         const me = getMe();
         runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
+        // 写离开记录供授权页(另一个域名)读、按类型算冷却决定是否自动重连
+        recordLeave(reason, me);
         clearAutoFireBurst(true);
         clearAttackLock("离开脱战");
         clearHuntTarget();
@@ -3487,6 +3714,14 @@
       function start() {
         if (runner.running) return;
         const me = getMe();
+        // 已重回游戏:若存在离开记录且距离开已过 10 秒(排除刚离开又惊动 start 的情况),清掉
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (bridge && typeof bridge.readLeave === "function" && typeof bridge.clearLeave === "function") {
+            const rec = bridge.readLeave();
+            if (rec && rec.ts && Date.now() - rec.ts > 10000) bridge.clearLeave();
+          }
+        } catch (_) {}
         runner.running = true;
         runner.startedAt = Date.now();
         runner.lastHp = me ? Number(me.hp || 0) : null;
@@ -3648,6 +3883,8 @@
         ui.autoFire.textContent = s.autoFireMode ? "攻击 ON" : "自动攻击";
         ui.hunt.classList.toggle("active", !!s.huntMode);
         ui.hunt.textContent = s.huntMode ? "追杀 ON" : "追杀";
+        ui.reconnect.classList.toggle("active", runner.autoReconnect !== false);
+        ui.reconnect.textContent = runner.autoReconnect !== false ? "重连 ON" : "重连 OFF";
       }
 
       runner.start = start;
@@ -3677,6 +3914,7 @@
         }
       });
       ui.leave.addEventListener("click", () => clickLeave("manual"));
+      ui.reconnect.addEventListener("click", toggleReconnect);
       ui.dropList.addEventListener("click", handleDropLeaderboardClick);
       ui.attackList.addEventListener("click", handleAttackListClick);
       ui.collapse.addEventListener("click", () => {
