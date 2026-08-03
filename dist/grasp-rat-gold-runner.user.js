@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.0
+// @version      1.9.1
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/*
@@ -53,7 +53,9 @@
       const v = gmGet(RECONNECT_KEY_SWITCH);
       return v === false ? false : true; // 默认 true
     },
-    setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); }
+    setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); },
+    readAck() { return gmGet(RECONNECT_KEY_ACK); },
+    clearAck() { gmDel(RECONNECT_KEY_ACK); }
   };
   // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用
   try {
@@ -70,8 +72,18 @@
       : Number.isFinite(maxAgeMs) ? maxAgeMs : -1;
   }
 
-  // 在授权页找"允许/授权"类按钮;容错多种文案与语言
+  // 在授权页找"允许/授权"类按钮;优先按 LINUX DO Connect 实际页面结构
+  // (class="btn-pill btn-pill-primary" 的 <a> 允许按钮),再回退到关键词匹配
   function findAuthorizeButton() {
+    const denyRe = /拒绝|取消|deny|cancel|decline|reject|refuse|不同意|不授权/;
+    // 1) 优先真实结构:<a class="btn-pill btn-pill-primary">允许</a>
+    try {
+      const primary = document.querySelector("a.btn-pill.btn-pill-primary, .btn-pill-primary");
+      if (primary && !denyRe.test((primary.innerText || primary.textContent || "").toLowerCase())) {
+        return primary;
+      }
+    } catch (_) {}
+    // 2) 关键词回退
     const keywords = ["允许", "authorize", "accept", "approve", "继续", "continue", "确认", "同意", "allow", "grant"];
     const candidates = Array.from(
       document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]")
@@ -79,11 +91,8 @@
     for (const el of candidates) {
       const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
       if (!text) continue;
-      if (keywords.some(k => text.includes(k.toLowerCase()))) {
-        // 跳过明显的"拒绝/取消"等负面按钮
-        if (/拒绝|取消|deny|cancel|拒绝授权|decline|reject/.test(text)) continue;
-        return el;
-      }
+      if (denyRe.test(text)) continue;
+      if (keywords.some(k => text.includes(k.toLowerCase()))) return el;
     }
     return null;
   }
@@ -958,6 +967,12 @@
         avoidances: 0,
         hourlyLimitLeaveTriggered: false,
         autoReconnect: true,
+        // 重连回游戏的"安全恢复态":刚通过自动重连回到游戏时进入,先不自动巡航,
+        // 监控近身富敌和血量,确认安全后才恢复运行——避免几滴血出生在敌人旁边被秒。
+        rejoinRecovery: false,
+        rejoinLeaveType: "",
+        rejoinSafeSince: 0,
+        rejoinTargetHpSafe: 40,
         lastThreat: null,
         enemyMotion: new Map(),
         projectileMotion: new Map(),
@@ -3374,6 +3389,75 @@
         return false;
       }
 
+      // 识别"刚通过自动重连回到游戏":授权页点允许前写过 ack(=离开 ts),
+      // 游戏侧读到的 ack 对得上最近一条离开记录 → 进入安全恢复态。仅在 pageMain
+      // 起始探测一次。
+      function detectRejoinOnLoad() {
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (!bridge) return;
+          const ack = typeof bridge.readAck === "function" ? bridge.readAck() : null;
+          const leave = typeof bridge.readLeave === "function" ? bridge.readLeave() : null;
+          if (!ack || !leave || !leave.ts || String(ack) !== String(leave.ts)) return;
+          // 命中:刚自动重连回来。lowhp 离开的格外危险,用更大发车范围 + 不自动启动。
+          runner.rejoinRecovery = true;
+          runner.rejoinLeaveType = leave.type || "damage";
+          runner.rejoinSafeSince = 0;
+          if (typeof bridge.clearAck === "function") bridge.clearAck();
+          push("检测到自动重连回游戏,进入安全恢复态(type=" + runner.rejoinLeaveType + ")…");
+          // 不自动恢复运行:停留 !running,由 monitorRejoinRecovery 看护
+        } catch (_) {}
+      }
+
+      // 安全恢复态看护:每 500ms 由 renderStatus 调用。
+      // - 若 170m(lowhp 时放宽到 250m)内出现富敌/移动威胁 → 立刻再离开,别在原地被秒。
+      // - 一旦 HP 已恢复过安全阈值 且 连续"耐力"看护无近身威胁持续 8s → 自动解除恢复态并 start()。
+      // - 用户手动点"启动"会覆盖:见 start() 内对 rejoin 的处理。
+      function monitorRejoinRecovery() {
+        if (!runner.rejoinRecovery) return;
+        const me = getMe();
+        if (!me) return; // 还没识别到玩家实体,继续等
+        const hp = Number(me.hp || 0);
+        const isLowHpRejoin = runner.rejoinLeaveType === "lowhp";
+        const scanCm = isLowHpRejoin ? 25000 : RICH_ENEMY_ESCAPE_CM;
+        try {
+          const threats = escapeEnemies(me, scanCm);
+          if (threats.length > 0) {
+            const t = threats[0];
+            if (!runner.running) {
+              push("重连恢复态:近身威胁(" + Math.round(t.dist / 100) + "m)再离开——排除出生即被秒");
+              clickLeave("重连恢复态近身威胁 " + Math.round(t.dist / 100) + "m");
+            } else {
+              // 已被用户手动启动,仍有近身威胁:不重启恢复态流程,交给主循环逃离分支
+            }
+            runner.rejoinSafeSince = 0;
+            return;
+          }
+        } catch (_) {
+          // escapeEnemies 异常不致命,继续看后续判定
+        }
+        if (runner.running) { // 用户已手动接管,退出恢复态由 start() 处理
+          runner.rejoinRecovery = false;
+          return;
+        }
+        if (hp < runner.rejoinTargetHpSafe) {
+          runner.rejoinSafeSince = 0;
+          return;
+        }
+        if (!runner.rejoinSafeSince) runner.rejoinSafeSince = Date.now();
+        if (Date.now() - runner.rejoinSafeSince >= 8000) {
+          runner.rejoinRecovery = false;
+          runner.rejoinSafeSince = 0;
+          // 重连已确认安全:清掉离开记录,自动恢复挂机
+          try {
+            const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+            if (bridge && typeof bridge.clearLeave === "function") bridge.clearLeave();
+          } catch (_) {}
+          push("重连恢复态已解除(HP=" + hp + ",近身无威胁),自动恢复挂机");
+          start();
+        }
+      }
+
       function setStepInterval(ms) {
         const next = Number(ms) || STEP_TICK_MS;
         if (runner.tickMs === next && runner.timer) return;
@@ -3714,7 +3798,11 @@
       function start() {
         if (runner.running) return;
         const me = getMe();
-        // 已重回游戏:若存在离开记录且距离开已过 10 秒(排除刚离开又惊动 start 的情况),清掉
+        // 用户手动启动 = 接管运行,解除重连安全恢复态,清掉旧离开记录
+        if (runner.rejoinRecovery) {
+          runner.rejoinRecovery = false;
+          runner.rejoinSafeSince = 0;
+        }
         try {
           const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
           if (bridge && typeof bridge.readLeave === "function" && typeof bridge.clearLeave === "function") {
@@ -3846,11 +3934,14 @@
 
       function renderStatus() {
         monitorStoppedDamage();
+        monitorRejoinRecovery();
         const s = snapshot();
         scheduleEntryDropLeaderboardRefresh();
         renderAttackLockList(getMe());
         root.classList.toggle("running", !!s.running);
-        ui.mode.textContent = s.combatMode ? "COMBAT" : s.huntMode ? "HUNT" : (s.running ? "ACTIVE" : "STANDBY");
+        ui.mode.textContent = runner.rejoinRecovery
+          ? ("REJOIN " + (runner.rejoinLeaveType || "").toUpperCase())
+          : (s.combatMode ? "COMBAT" : s.huntMode ? "HUNT" : (s.running ? "ACTIVE" : "STANDBY"));
         ui.action.textContent = s.error ? ("ERROR: " + s.error) : (s.action || "等待指令");
         ui.hp.textContent = s.hp ? String(s.hp) : "--";
         ui.gain.textContent = "+" + (s.delta || 0);
@@ -3928,6 +4019,7 @@
       startLineLoop();
       checkHourlyStaminaLimitLeave();
       renderDropLeaderboard();
+      detectRejoinOnLoad();
       renderStatus();
     }
   }
