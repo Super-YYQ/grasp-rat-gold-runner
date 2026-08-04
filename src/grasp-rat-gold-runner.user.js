@@ -203,6 +203,15 @@
         // 冷却已到:在登出态才点登录跳授权页
         const loginBtn = findLinuxDoLoginButton();
         if (!loginBtn) return; // 没登录入口:不点,等人来或下个 tick 再看
+
+        // 新增:手动触发就跳过自动重连
+        if (rec.source === 'manual') {
+          document.title = "[手动登录·跳过自动重连] " + baseTitle;
+          jumped = true;
+          clearInterval(poll);
+          return;
+        }
+
         try {
           // 优先用真实跳转链接 href 直接导航,比 click 更稳
           const href = loginBtn.getAttribute && loginBtn.getAttribute("href");
