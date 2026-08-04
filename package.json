@@ -6,6 +6,7 @@
   "scripts": {
     "check": "node --check src/grasp-rat-gold-runner.user.js && node --check dist/grasp-rat-gold-runner.user.js && node --check src/grasp-rat-gold-runner-mobile.user.js && node --check dist/grasp-rat-gold-runner-mobile.user.js",
     "test:nav": "node scripts/test-coin-nav.mjs",
+    "test:reconnect": "node scripts/test-reconnect-safety.mjs",
     "sync:dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sync-dist.ps1",
     "release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-check.ps1"
   }

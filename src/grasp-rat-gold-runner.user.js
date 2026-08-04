@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.3
+// @version      1.9.4
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/*
@@ -22,10 +22,17 @@
   // 的读写由本 IIFE 顶层(userscript 沙盒)负责,并通过 window 暴露桥接给 pageMain 调用。
   const RECONNECT_COOLDOWN_LOWHP_MS = 30 * 60 * 1000;
   const RECONNECT_COOLDOWN_STAMINA_MS = 60 * 60 * 1000;
+  // 自动重连只对“刚发生的这一轮离开”负责。超过冷却后再给一小段宽限期，
+  // 避免旧记录在用户以后正常打开游戏时继续驱动登录/授权跳转。
+  const RECONNECT_GRACE_MS = 10 * 60 * 1000;
+  const RECONNECT_AUTH_MAX_WAIT_MS = 5 * 60 * 1000;
+  const RECONNECT_LOGIN_SETTLE_MS = 2500;
   const RECONNECT_CRITICAL_HP = 25; // 与 pageMain 内 COMBAT_CRITICAL_HP 保持一致
   const RECONNECT_KEY_LEAVE = "crgrLeaveRecord";
   const RECONNECT_KEY_ACK = "crgrReconnectAck";
+  const RECONNECT_KEY_FLOW = "crgrReconnectFlow";
   const RECONNECT_KEY_SWITCH = "crgrAutoReconnect";
+  const RECONNECT_AUTO_TYPES = new Set(["damage", "lowhp", "stamina"]);
 
   function gmGet(key) {
     try {
@@ -44,11 +51,48 @@
     } catch (_) {}
   }
 
+  function reconnectCooldownMs(type) {
+    return type === "damage" ? 0
+      : type === "lowhp" ? RECONNECT_COOLDOWN_LOWHP_MS
+      : type === "stamina" ? RECONNECT_COOLDOWN_STAMINA_MS
+      : -1;
+  }
+
+  function reconnectRecordIsActive(rec, now) {
+    if (!rec || !RECONNECT_AUTO_TYPES.has(rec.type)) return false;
+    const ts = Number(rec.ts);
+    if (!Number.isFinite(ts)) return false;
+    const age = (Number(now) || Date.now()) - ts;
+    if (age < -60 * 1000) return false;
+    return age <= reconnectCooldownMs(rec.type) + RECONNECT_GRACE_MS;
+  }
+
   // pageMain(页面上下文)通过该桥读写离开记录与重连开关;实现都在 userscript 沙盒。
   const reconnectBridge = {
     readLeave() { return gmGet(RECONNECT_KEY_LEAVE) || null; },
     writeLeave(rec) { gmSet(RECONNECT_KEY_LEAVE, rec); },
     clearLeave() { gmDel(RECONNECT_KEY_LEAVE); },
+    readFlow() { return gmGet(RECONNECT_KEY_FLOW) || null; },
+    markLeaveFlow(ts) {
+      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "leave", at: Date.now(), v: 1 });
+    },
+    claimLoginFlow(ts) {
+      const flow = gmGet(RECONNECT_KEY_FLOW);
+      if (!flow || String(flow.ts) !== String(ts)) return false;
+      if (flow.phase === "game-login" || flow.phase === "auth") return false;
+      if (flow.phase !== "leave") return false;
+      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "game-login", at: Date.now(), v: 1 });
+      return true;
+    },
+    claimAuthFlow(ts) {
+      const flow = gmGet(RECONNECT_KEY_FLOW);
+      if (!flow || String(flow.ts) !== String(ts)) return false;
+      if (flow.phase === "auth") return false;
+      if (flow.phase !== "game-login") return false;
+      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "auth", at: Date.now(), v: 1 });
+      return true;
+    },
+    clearFlow() { gmDel(RECONNECT_KEY_FLOW); },
     readSwitch() {
       const v = gmGet(RECONNECT_KEY_SWITCH);
       return v === false ? false : true; // 默认 true
@@ -56,13 +100,17 @@
     setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); },
     readAck() { return gmGet(RECONNECT_KEY_ACK); },
     clearAck() { gmDel(RECONNECT_KEY_ACK); },
+    claimAck(ts) {
+      const ack = gmGet(RECONNECT_KEY_ACK);
+      if (ack && String(ack) === String(ts)) return false;
+      const leave = gmGet(RECONNECT_KEY_LEAVE);
+      if (!leave || String(leave.ts) !== String(ts)) return false;
+      gmSet(RECONNECT_KEY_ACK, ts);
+      return true;
+    },
     // 冷却映射(ms):供游戏域名页算"距离开多久才能重连"
-    cooldownMs(type) {
-      return type === "damage" ? 0
-        : type === "lowhp" ? RECONNECT_COOLDOWN_LOWHP_MS
-        : type === "stamina" ? RECONNECT_COOLDOWN_STAMINA_MS
-        : -1;
-    }
+    cooldownMs: reconnectCooldownMs,
+    isRecordActive: reconnectRecordIsActive
   };
   // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用
   try {
@@ -74,12 +122,28 @@
 
   // 在授权页找"允许/授权"类按钮;优先按 LINUX DO Connect 实际页面结构
   // (class="btn-pill btn-pill-primary" 的 <a> 允许按钮),再回退到关键词匹配
+  function isVisibleEnabledAction(el) {
+    if (!el || !el.isConnected) return false;
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+    try {
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") {
+        return false;
+      }
+    } catch (_) {}
+    return true;
+  }
+
   function findAuthorizeButton() {
-    const denyRe = /拒绝|取消|deny|cancel|decline|reject|refuse|不同意|不授权/;
+    const denyRe = /拒绝|取消|deny|cancel|decline|reject|refuse|不同意|不授权|不允许|not now/;
+    const allowRe = /允许|授权|authorize|accept|approve|继续|continue|确认|同意|allow|grant/;
     // 1) 优先真实结构:<a class="btn-pill btn-pill-primary">允许</a>
     try {
       const primary = document.querySelector("a.btn-pill.btn-pill-primary, .btn-pill-primary");
-      if (primary && !denyRe.test((primary.innerText || primary.textContent || "").toLowerCase())) {
+      const primaryText = (primary && (primary.innerText || primary.textContent || "")).trim().toLowerCase();
+      if (primary && allowRe.test(primaryText) && !denyRe.test(primaryText) && isVisibleEnabledAction(primary)) {
         return primary;
       }
     } catch (_) {}
@@ -92,42 +156,125 @@
       const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
       if (!text) continue;
       if (denyRe.test(text)) continue;
-      if (keywords.some(k => text.includes(k.toLowerCase()))) return el;
+      if (keywords.some(k => text.includes(k.toLowerCase())) && isVisibleEnabledAction(el)) return el;
     }
     return null;
   }
 
   function oauthReconnectMain() {
-    // 授权页只做一件事:立刻找"允许"按钮点掉,把浏览器送回游戏。
-    // 等冷却这件事放在游戏域名页(更稳、不会因 OAuth 会话长时间挂起而失效),
-    // 不在这页等——避免"等待重连超时"式死等。
+    // 授权页只处理由本脚本刚刚发起的这一轮重连流程。
+    // 没有流程标记、已确认过或已过期的记录一律不碰按钮。
     try {
+      if (!reconnectBridge.readSwitch()) {
+        document.title = "[自动重连已关闭·不点允许] " + (document.title || "");
+        return;
+      }
       const rec = reconnectBridge.readLeave();
-      const ack = gmGet(RECONNECT_KEY_ACK);
-      // 防重复:已对同一离开记录点过允许就不再点(刷新授权页也安全)
-      if (ack && rec && rec.ts && String(ack) === String(rec.ts)) {
+      const flow = reconnectBridge.readFlow();
+      if (!reconnectBridge.isRecordActive(rec) || rec.enabled === false
+        || !flow || !rec.ts || String(flow.ts) !== String(rec.ts)) {
+        document.title = "[无有效重连流程·不点允许] " + (document.title || "");
+        return;
+      }
+      const ack = reconnectBridge.readAck();
+      if (ack && String(ack) === String(rec.ts)) {
         document.title = "[已重连过·不重复点] " + (document.title || "");
         return;
       }
+      if (flow.phase === "auth") {
+        document.title = "[授权动作已占用·不重复点] " + (document.title || "");
+        return;
+      }
+      if (flow.phase !== "game-login") {
+        if (flow.phase === "leave") {
+          // 直接落到授权页而没有经过游戏页登录抢占，视为未确认的手动/异常导航；
+          // 宁可让用户手动处理，也不把这次页面访问当成自动允许。
+          reconnectBridge.clearLeave();
+          reconnectBridge.clearAck();
+          reconnectBridge.clearFlow();
+        }
+        document.title = "[未确认游戏页登录·不点允许] " + (document.title || "");
+        return;
+      }
+      // 在按钮尚未渲染出来时就锁定授权阶段，防止用户手动允许或页面刷新后，
+      // 游戏页又把同一条离开记录当成新的登录任务。
+      if (!reconnectBridge.claimAuthFlow(rec.ts)) {
+        document.title = "[授权动作已占用·不重复点] " + (document.title || "");
+        return;
+      }
+
       const baseTitle = document.title || "";
       const startedAt = Date.now();
-      const FIND_BTN_TIMEOUT_MS = 60 * 1000; // 找允许按钮最多重试 60 秒
-      const poll = window.setInterval(() => {
+      let poll = 0;
+      let hookedAuthorizeButton = null;
+      const cancelForManualAuthorize = () => {
+        reconnectBridge.clearLeave();
+        reconnectBridge.clearAck();
+        reconnectBridge.clearFlow();
+        document.title = "[手动允许·自动重连已取消] " + baseTitle;
+        if (poll) clearInterval(poll);
+        poll = 0;
+      };
+      const hookManualAuthorize = button => {
+        if (!button || button === hookedAuthorizeButton) return;
+        hookedAuthorizeButton = button;
         try {
-          const btn = findAuthorizeButton();
-          if (btn) {
-            gmSet(RECONNECT_KEY_ACK, (rec && rec.ts) || 0);
+          button.addEventListener("click", event => {
+            if (event && event.isTrusted === true) cancelForManualAuthorize();
+          }, true);
+        } catch (_) {}
+      };
+
+      poll = window.setInterval(() => {
+        try {
+          const current = reconnectBridge.readLeave();
+          const currentFlow = reconnectBridge.readFlow();
+          const now = Date.now();
+          if (!reconnectBridge.readSwitch() || !reconnectBridge.isRecordActive(current)
+            || current.enabled === false || !current.ts || String(current.ts) !== String(rec.ts)
+            || !currentFlow || String(currentFlow.ts) !== String(rec.ts) || currentFlow.phase !== "auth") {
             clearInterval(poll);
-            document.title = "[已点击允许·重连中] " + baseTitle;
-            try { btn.click(); } catch (_) {
-              try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
-            }
+            poll = 0;
             return;
           }
-          document.title = "[等待授权页加载·找允许] " + baseTitle;
-          if (Date.now() - startedAt > FIND_BTN_TIMEOUT_MS) {
+
+          const currentAck = reconnectBridge.readAck();
+          if (currentAck && String(currentAck) === String(rec.ts)) {
             clearInterval(poll);
-            document.title = "[60秒未找到允许按钮·停止] " + baseTitle;
+            document.title = "[已重连过·不重复点] " + baseTitle;
+            return;
+          }
+
+          const cooldown = reconnectBridge.cooldownMs(current.type);
+          const dueAt = Number(current.ts) + cooldown;
+          if (now < dueAt) {
+            document.title = "[冷却中·不点允许] " + baseTitle;
+          } else {
+            const btn = findAuthorizeButton();
+            if (btn) {
+              hookManualAuthorize(btn);
+              // 流程已在按钮出现前抢占；这里先写 ack，最后才允许触发页面导航。
+              // 同页重复注入、重复刷新或多标签页都只能有一个胜者。
+              if (!reconnectBridge.claimAck(rec.ts)) {
+                clearInterval(poll);
+                poll = 0;
+                return;
+              }
+              clearInterval(poll);
+              poll = 0;
+              document.title = "[已点击允许·重连中] " + baseTitle;
+              try { btn.click(); } catch (_) {
+                try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
+              }
+              return;
+            }
+            document.title = "[等待授权页加载·找允许] " + baseTitle;
+          }
+
+          if (now - startedAt > RECONNECT_AUTH_MAX_WAIT_MS) {
+            clearInterval(poll);
+            poll = 0;
+            document.title = "[重连流程等待超时·停止] " + baseTitle;
           }
         } catch (_) {
           // 单次异常:静默,下一拍继续
@@ -146,7 +293,7 @@
     // 1) 精确:游戏页真实按钮 id
     try {
       const btn = document.getElementById("joinBtn");
-      if (btn) return btn;
+      if (btn && isVisibleEnabledAction(btn)) return btn;
     } catch (_) {}
     // 2) 实际 OAuth 跳转链接
     try {
@@ -154,6 +301,9 @@
       for (const a of links) {
         const text = (a.innerText || a.textContent || "").trim().toLowerCase();
         if (denyRe.test(text)) continue;
+        const href = a.getAttribute("href") || "";
+        if (!/connect\.linux\.do|oauth2\/authorize/i.test(href)) continue;
+        if (!isVisibleEnabledAction(a)) continue;
         return a;
       }
     } catch (_) {}
@@ -164,7 +314,8 @@
       const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
       if (!text) continue;
       if (denyRe.test(text)) continue;
-      if (keywords.some(k => text.includes(k.toLowerCase()))) return el;
+      if (el.tagName === "A" && !/connect\.linux\.do|oauth2\/authorize/i.test(el.getAttribute("href") || "")) continue;
+      if (keywords.some(k => text.includes(k.toLowerCase())) && isVisibleEnabledAction(el)) return el;
     }
     return null;
   }
@@ -173,18 +324,97 @@
   // 防误触三条件须同时满足才会点登录跳授权页:开关开 + 合法离开记录 + 页面出现 LinuxDo 登录入口。
   // 任意一条不满足(尤其正常挂机时登录入口不在场)→什么都不做,绝不自作主张戳登录。
   function gameReconnectWatcher() {
-    if (!reconnectBridge.readSwitch()) return;
+    const watcherHost = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    const watcherKey = "__crgrGameReconnectWatcher";
+    try {
+      if (watcherHost[watcherKey]) return;
+      watcherHost[watcherKey] = true;
+    } catch (_) {}
+
     const baseTitle = document.title || "";
     const POLL_MS = 1000;
     let jumped = false;
-    const poll = window.setInterval(() => {
+    let loginVisibleSince = 0;
+    let observedTs = "";
+    let hookedLoginButton = null;
+    let poll = 0;
+    let manualLoginListener = null;
+    const release = () => {
+      if (poll) clearInterval(poll);
+      poll = 0;
+      if (manualLoginListener) {
+        try { document.removeEventListener("click", manualLoginListener, true); } catch (_) {}
+        manualLoginListener = null;
+      }
+      try { watcherHost[watcherKey] = false; } catch (_) {}
+    };
+    const cancelForManualLogin = () => {
+      // 用户自己点登录时，当前离开记录不再代表一轮自动重连；
+      // 清掉流程标记，防止授权页把这次手动登录误当成自动允许。
+      reconnectBridge.clearLeave();
+      reconnectBridge.clearAck();
+      reconnectBridge.clearFlow();
+      jumped = true;
+      document.title = "[手动登录·自动重连已取消] " + baseTitle;
+      release();
+    };
+    const hookManualLogin = button => {
+      if (!button || button === hookedLoginButton) return;
+      hookedLoginButton = button;
       try {
-        if (jumped) { clearInterval(poll); return; }
+        button.addEventListener("click", event => {
+          if (event && event.isTrusted === true) cancelForManualLogin();
+        }, true);
+      } catch (_) {}
+    };
+    manualLoginListener = event => {
+      if (!event || event.isTrusted !== true) return;
+      const button = findLinuxDoLoginButton();
+      const target = event.target;
+      if (!button || target !== button && !(button.contains && button.contains(target))) return;
+      cancelForManualLogin();
+    };
+    try { document.addEventListener("click", manualLoginListener, true); } catch (_) {}
+
+    poll = window.setInterval(() => {
+      try {
+        if (jumped) { release(); return; }
+        if (!reconnectBridge.readSwitch()) return;
         const rec = reconnectBridge.readLeave();
-        if (!rec || !rec.ts) { return; } // 没离开记录:正常在玩/刚手动启动后被清,不管
-        if (rec.type !== "damage" && rec.type !== "lowhp" && rec.type !== "stamina") {
+        if (!rec || !rec.ts) return; // 没离开记录:正常在玩/刚手动启动后被清,不管
+        if (!RECONNECT_AUTO_TYPES.has(rec.type) || rec.enabled === false) {
           return; // manual/other/未知:不重连
         }
+        if (!reconnectBridge.isRecordActive(rec)) {
+          // 旧记录只能清理，不能再触发任何导航。
+          reconnectBridge.clearLeave();
+          reconnectBridge.clearAck();
+          reconnectBridge.clearFlow();
+          return;
+        }
+        const flow = reconnectBridge.readFlow();
+        if (!flow || String(flow.ts) !== String(rec.ts)) return;
+        const ack = reconnectBridge.readAck();
+        // 允许按钮已经被点击，返回游戏的这段时间由 pageMain 做安全恢复；
+        // 此时绝不能因为登录入口短暂闪现又发起一轮登录。
+        if (ack && String(ack) === String(rec.ts)) return;
+        if (flow.phase !== "leave") {
+          // 已被本流程的另一实例占用，当前实例退出看护，不再重试。
+          release();
+          return;
+        }
+        if (observedTs !== String(rec.ts)) {
+          observedTs = String(rec.ts);
+          loginVisibleSince = 0;
+        }
+
+        const loginBtn = findLinuxDoLoginButton();
+        if (!loginBtn) {
+          loginVisibleSince = 0;
+          return;
+        }
+        hookManualLogin(loginBtn);
+
         const cd = reconnectBridge.cooldownMs(rec.type);
         if (cd < 0) return;
         const dueAt = rec.ts + cd;
@@ -192,42 +422,42 @@
         if (now < dueAt) {
           // 冷却未到:只显示倒计时,不动作。但前提是确实在登出态——
           // 若页面上没出现登录入口(可能已登录或在玩),就不动 title、不打扰
-          const loginBtn = findLinuxDoLoginButton();
-          if (!loginBtn) return; // 登录入口不在场:多半已登录正常玩,绝不干扰
           const rem = dueAt - now;
           const mm = String(Math.floor(rem / 60000)).padStart(2, "0");
           const ss = String(Math.floor((rem % 60000) / 1000)).padStart(2, "0");
           document.title = "[待重连·还需 " + mm + ":" + ss + "] " + baseTitle;
+          loginVisibleSince = 0;
           return;
         }
-        // 冷却已到:在登出态才点登录跳授权页
-        const loginBtn = findLinuxDoLoginButton();
-        if (!loginBtn) return; // 没登录入口:不点,等人来或下个 tick 再看
-
-        // 新增:手动触发就跳过自动重连
-        if (rec.source === 'manual') {
-          document.title = "[手动登录·跳过自动重连] " + baseTitle;
-          jumped = true;
-          clearInterval(poll);
+        // 登录入口必须连续可见一段时间，过滤游戏页初始化时的短暂占位。
+        if (!loginVisibleSince) loginVisibleSince = now;
+        if (now - loginVisibleSince < RECONNECT_LOGIN_SETTLE_MS) {
+          document.title = "[确认登出态·暂不登录] " + baseTitle;
           return;
         }
 
         try {
+          // 先持久化抢占结果，再触发一次导航；失败也不回退重试。
+          if (!reconnectBridge.claimLoginFlow(rec.ts)) {
+            jumped = true;
+            release();
+            return;
+          }
           // 优先用真实跳转链接 href 直接导航,比 click 更稳
           const href = loginBtn.getAttribute && loginBtn.getAttribute("href");
           jumped = true;
           document.title = "[冷却到期·跳授权页] " + baseTitle;
+          release();
           if (href && !/^javascript:/i.test(href)) {
-            clearInterval(poll);
             location.href = href;
           } else {
-            clearInterval(poll);
             try { loginBtn.click(); } catch (_) {
               loginBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             }
           }
         } catch (_) {
-          jumped = false; // 点失败下个 tick 再试
+          // 导航/点击失败也不自动重试，避免失败状态下向服务器重复发起登录。
+          release();
         }
       } catch (_) {
         // 单次异常:静默继续
@@ -1036,6 +1266,7 @@
         lastMoveMode: "idle",
         lastHp: null,
         stoppedHpBaseline: null,
+        leaveInProgress: false,
         lastBalance: null,
         deltaBalance: 0,
         leaves: 0,
@@ -1047,6 +1278,7 @@
         rejoinRecovery: false,
         rejoinLeaveType: "",
         rejoinSafeSince: 0,
+        rejoinPeakHp: null,
         rejoinTargetHpSafe: 40,
         lastThreat: null,
         enemyMotion: new Map(),
@@ -3362,12 +3594,15 @@
       // type: manual=手动不重连 / stamina=1h体力耗尽 / lowhp=掉血且离开时HP≤25 /
       //       damage=掉血但HP>25 / other=兜底不重连。开关关闭时仍写记录便于排查,
       //       但授权页会读到开关并直接不点允许。
-      function recordLeave(reason, me) {
+      function recordLeave(reason, me, options) {
         try {
           const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
           if (!bridge || typeof bridge.writeLeave !== "function") return;
+          const noReconnect = !!(options && options.noReconnect);
           let type = "other";
-          if (reason === "manual") {
+          if (noReconnect) {
+            type = "other";
+          } else if (reason === "manual") {
             type = "manual";
           } else if (runner.hourlyLimitLeaveTriggered && /1h体力限制/.test(String(reason || ""))) {
             type = "stamina";
@@ -3379,28 +3614,50 @@
               type = "damage";
             }
           }
-          bridge.writeLeave({
+          const enabled = !noReconnect && runner.autoReconnect !== false;
+          const rec = {
             ts: Date.now(),
             type,
             hp: me ? Number(me.hp || 0) : null,
             reason: String(reason || ""),
-            enabled: runner.autoReconnect !== false,
-            v: 1
-          });
+            enabled,
+            v: 2
+          };
+          bridge.writeLeave(rec);
+          if (enabled && (type === "damage" || type === "lowhp" || type === "stamina")
+            && typeof bridge.markLeaveFlow === "function") {
+            if (typeof bridge.clearAck === "function") bridge.clearAck();
+            bridge.markLeaveFlow(rec.ts);
+          } else {
+            if (typeof bridge.clearFlow === "function") bridge.clearFlow();
+            if (typeof bridge.clearAck === "function") bridge.clearAck();
+          }
+          return rec;
         } catch (_) {
           // 写记录失败不影响离开本身
         }
+        return null;
       }
 
-      function clearLeaveIfRejoined() {
+      function clearReconnectState() {
         try {
           const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
-          if (!bridge || typeof bridge.clearLeave !== "function") return;
-          bridge.clearLeave();
+          if (!bridge) return;
+          if (typeof bridge.clearLeave === "function") bridge.clearLeave();
+          if (typeof bridge.clearAck === "function") bridge.clearAck();
+          if (typeof bridge.clearFlow === "function") bridge.clearFlow();
         } catch (_) {}
       }
 
-      function clickLeave(reason) {
+      function clickLeave(reason, options) {
+        if (runner.leaveInProgress) return false;
+        const noReconnect = !!(options && options.noReconnect) || runner.rejoinRecovery;
+        runner.leaveInProgress = true;
+        let button = null;
+        try {
+          button = els.leaveBtn
+            || Array.from(document.querySelectorAll("button")).find(btn => (btn.textContent || "").trim() === "离开");
+        } catch (_) {}
         stopMove();
         setDanger(false);
         runner.leaves += 1;
@@ -3409,10 +3666,22 @@
         runner.huntMode = false;
         runner.autoFireMode = false;
         runner.autoFireStatus = "OFF";
+        if (noReconnect) {
+          runner.rejoinRecovery = false;
+          runner.rejoinSafeSince = 0;
+          runner.rejoinPeakHp = null;
+        }
         const me = getMe();
         runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
+        if (!button) {
+          clearReconnectState();
+          runner.lastError = "leave button not found";
+          push("离开失败：" + runner.lastError + "（已停止自动重连）");
+          renderStatus();
+          return false;
+        }
         // 写离开记录供授权页(另一个域名)读、按类型算冷却决定是否自动重连
-        recordLeave(reason, me);
+        recordLeave(reason, me, { noReconnect });
         clearAutoFireBurst(true);
         clearAttackLock("离开脱战");
         clearHuntTarget();
@@ -3426,19 +3695,19 @@
         }
         runner.tickMs = STEP_TICK_MS;
         try {
-          const button = els.leaveBtn
-            || Array.from(document.querySelectorAll("button")).find(btn => (btn.textContent || "").trim() === "离开");
-          if (!button) throw new Error("leave button not found");
           button.click();
           push("已点击离开脱战：" + reason);
         } catch (err) {
+          clearReconnectState();
           runner.lastError = String(err && err.message || err);
-          push("离开失败：" + runner.lastError);
+          push("离开失败：" + runner.lastError + "（已停止自动重连）");
         }
         renderStatus();
+        return true;
       }
 
       function monitorStoppedDamage() {
+        if (runner.leaveInProgress) return true;
         const me = getMe();
         if (runner.running) {
           runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
@@ -3473,12 +3742,16 @@
           if (!bridge) return;
           const ack = typeof bridge.readAck === "function" ? bridge.readAck() : null;
           const leave = typeof bridge.readLeave === "function" ? bridge.readLeave() : null;
-          if (!ack || !leave || !leave.ts || String(ack) !== String(leave.ts)) return;
+          const flow = typeof bridge.readFlow === "function" ? bridge.readFlow() : null;
+          const active = typeof bridge.isRecordActive === "function" ? bridge.isRecordActive(leave) : true;
+          if (!ack || !leave || !leave.ts || String(ack) !== String(leave.ts)
+            || !active || leave.enabled === false
+            || !flow || String(flow.ts) !== String(leave.ts)) return;
           // 命中:刚自动重连回来。lowhp 离开的格外危险,用更大发车范围 + 不自动启动。
           runner.rejoinRecovery = true;
           runner.rejoinLeaveType = leave.type || "damage";
           runner.rejoinSafeSince = 0;
-          if (typeof bridge.clearAck === "function") bridge.clearAck();
+          runner.rejoinPeakHp = null;
           push("检测到自动重连回游戏,进入安全恢复态(type=" + runner.rejoinLeaveType + ")…");
           // 不自动恢复运行:停留 !running,由 monitorRejoinRecovery 看护
         } catch (_) {}
@@ -3490,9 +3763,18 @@
       // - 用户手动点"启动"会覆盖:见 start() 内对 rejoin 的处理。
       function monitorRejoinRecovery() {
         if (!runner.rejoinRecovery) return;
+        if (runner.leaveInProgress) return;
         const me = getMe();
         if (!me) return; // 还没识别到玩家实体,继续等
         const hp = Number(me.hp || 0);
+        if (!Number.isFinite(hp)) return;
+        if (runner.rejoinPeakHp === null) runner.rejoinPeakHp = hp;
+        if (hp > runner.rejoinPeakHp) runner.rejoinPeakHp = hp;
+        if (hp < runner.rejoinPeakHp) {
+          push("重连恢复态血量下降，停止本轮自动重连");
+          clickLeave("重连恢复态血量下降 " + runner.rejoinPeakHp + " -> " + hp, { noReconnect: true });
+          return;
+        }
         const isLowHpRejoin = runner.rejoinLeaveType === "lowhp";
         const scanCm = isLowHpRejoin ? 25000 : RICH_ENEMY_ESCAPE_CM;
         try {
@@ -3501,7 +3783,7 @@
             const t = threats[0];
             if (!runner.running) {
               push("重连恢复态:近身威胁(" + Math.round(t.dist / 100) + "m)再离开——排除出生即被秒");
-              clickLeave("重连恢复态近身威胁 " + Math.round(t.dist / 100) + "m");
+              clickLeave("重连恢复态近身威胁 " + Math.round(t.dist / 100) + "m", { noReconnect: true });
             } else {
               // 已被用户手动启动,仍有近身威胁:不重启恢复态流程,交给主循环逃离分支
             }
@@ -3513,6 +3795,7 @@
         }
         if (runner.running) { // 用户已手动接管,退出恢复态由 start() 处理
           runner.rejoinRecovery = false;
+          runner.rejoinPeakHp = null;
           return;
         }
         if (hp < runner.rejoinTargetHpSafe) {
@@ -3523,11 +3806,9 @@
         if (Date.now() - runner.rejoinSafeSince >= 8000) {
           runner.rejoinRecovery = false;
           runner.rejoinSafeSince = 0;
-          // 重连已确认安全:清掉离开记录,自动恢复挂机
-          try {
-            const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
-            if (bridge && typeof bridge.clearLeave === "function") bridge.clearLeave();
-          } catch (_) {}
+          runner.rejoinPeakHp = null;
+          // 重连已确认安全:清掉所有流程标记,自动恢复挂机。
+          clearReconnectState();
           push("重连恢复态已解除(HP=" + hp + ",近身无威胁),自动恢复挂机");
           start();
         }
@@ -3874,17 +4155,11 @@
         if (runner.running) return;
         const me = getMe();
         // 用户手动启动 = 接管运行,解除重连安全恢复态,清掉旧离开记录
-        if (runner.rejoinRecovery) {
-          runner.rejoinRecovery = false;
-          runner.rejoinSafeSince = 0;
-        }
-        try {
-          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
-          if (bridge && typeof bridge.readLeave === "function" && typeof bridge.clearLeave === "function") {
-            const rec = bridge.readLeave();
-            if (rec && rec.ts && Date.now() - rec.ts > 10000) bridge.clearLeave();
-          }
-        } catch (_) {}
+        runner.rejoinRecovery = false;
+        runner.rejoinSafeSince = 0;
+        runner.rejoinPeakHp = null;
+        runner.leaveInProgress = false;
+        clearReconnectState();
         runner.running = true;
         runner.startedAt = Date.now();
         runner.lastHp = me ? Number(me.hp || 0) : null;
