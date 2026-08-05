@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.12
+
+- 新增 §11.2 属性测试（`scripts/test-nav-property.mjs`）：确定性随机场景覆盖 0-2000 金币（含重复/超大 ID、非法坐标、缺失/非法金额）、0-100 敌人，断言不返回 NaN、不选非法金币、逃离锚点不落在敌人安全半径内、到达模拟不振荡、同一输入结果确定一致。
+- 属性测试暴露并修复两个鲁棒性 bug：`travelTicks` 与 `pointToSegmentDistance` 对缺失/非法坐标返回 `NaN`；现统一按“不可达”（`Infinity`）处理，PC/mobile userscript 与 `coin-nav-logic.mjs` 同步。
+- 纳入 `npm run test` 与 `release:check`。
+- PC src/dist 与 package.json 同步到 1.9.12；mobile 到 0.1.6。
+
 ## 1.9.11
 
 - 修复到达金币后可能永久等待（§5.7，PC 与手机端同步）：贴近金币后先等 600ms 确认入账；若金币迟迟不消失，做最多 2 次小幅正交轻推；仍不消失则把该 `drop_id` 临时黑名单 8 秒并重规划，不再卡在原地。`coinCandidates` 与路线目标回退都会过滤黑名单金币。

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner Mobile
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      0.1.5
+// @version      0.1.6
 // @description  Mobile-focused Grasp Rat helper with long-press target, compact controls, hunt drawer, and fire lock drawer.
 // @match        https://grasp-rat-game.h-e.top/*
 // @noframes
@@ -2145,6 +2145,8 @@
       function pointToSegmentDistance(px, py, ax, ay, bx, by) {
         const vx = bx - ax;
         const vy = by - ay;
+        // §11.2:非法坐标按"不可达"(Infinity)处理,绝不返回 NaN。
+        if (!Number.isFinite(vx) || !Number.isFinite(vy)) return Infinity;
         const len2 = vx * vx + vy * vy;
         if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
         const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
@@ -2167,6 +2169,8 @@
       function travelTicks(fromX, fromY, toX, toY) {
         const ax = Math.abs(Number(toX) - Number(fromX));
         const ay = Math.abs(Number(toY) - Number(fromY));
+        // §11.2:非法/缺失坐标按"不可达"处理,绝不返回 NaN。
+        if (!Number.isFinite(ax) || !Number.isFinite(ay)) return Infinity;
         const diagonal = Math.min(ax, ay);
         const axis = Math.max(ax, ay) - diagonal;
         return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;

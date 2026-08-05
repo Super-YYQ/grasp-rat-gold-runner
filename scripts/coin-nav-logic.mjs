@@ -71,6 +71,8 @@ export function simulateCoinApproach(startX, startY, stepAxis, stepDiag, maxStep
 export function travelTicks(fromX, fromY, toX, toY) {
   const ax = Math.abs(Number(toX) - Number(fromX));
   const ay = Math.abs(Number(toY) - Number(fromY));
+  // §11.2:非法/缺失坐标按"不可达"处理,绝不返回 NaN。
+  if (!Number.isFinite(ax) || !Number.isFinite(ay)) return Infinity;
   const diagonal = Math.min(ax, ay);
   const axis = Math.max(ax, ay) - diagonal;
   return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
@@ -100,6 +102,8 @@ export function readDropAmount(drop) {
 export function pointToSegmentDistance(px, py, ax, ay, bx, by) {
   const vx = Number(bx) - Number(ax);
   const vy = Number(by) - Number(ay);
+  // §11.2:非法/缺失坐标按"不可达"(Infinity)处理,绝不返回 NaN。
+  if (!Number.isFinite(vx) || !Number.isFinite(vy)) return Infinity;
   const len2 = vx * vx + vy * vy;
   if (len2 <= 1e-9) return Math.hypot(Number(px) - Number(ax), Number(py) - Number(ay));
   const t = Math.max(0, Math.min(1, ((Number(px) - Number(ax)) * vx + (Number(py) - Number(ay)) * vy) / len2));
