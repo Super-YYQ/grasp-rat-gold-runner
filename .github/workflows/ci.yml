@@ -1,0 +1,33 @@
+# §11.5 / §13.2 发布门禁跨平台 CI
+# 在 Windows(验证 PowerShell 兼容)与 Ubuntu(验证跨平台 Node 构建/测试)上,
+# 以当前 Node LTS 运行完整 release-check。
+name: release-check
+
+on:
+  push:
+    branches: [optimize, main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22            # 当前 Node LTS
+          cache: npm
+
+      - run: npm ci
+
+      - name: 跨平台 release check（node 入口）
+        run: npm run release:check
+
+      - name: 验证 Windows PowerShell 包装（仅 Windows）
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-check.ps1
+        if: runner.os == 'Windows'

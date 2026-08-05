@@ -1,5 +1,9 @@
 # 收益模式 (profit-mode) 设计
 
+> 状态: **proposal（设计提案，未交付）**。暂无独立 userscript / src / dist 产物，
+> Changelog 与 README 不应理解为已上线。待 P0 安全重构与模块化（Phase 2）完成后，
+> 复用模块化后的 planner / adapter / fire controller 再实现。
+
 ## Context
 
 脚本现取向是"挂机吃金币、被打了就跑",不主动 PVP。用户反馈希望有一个**专注金币收益、含击杀挂机玩家掉落**的精简模式:
