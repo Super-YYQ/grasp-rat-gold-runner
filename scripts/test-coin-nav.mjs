@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import {
   COIN_REACHED_CM,
   coinMoveDecision,
+  minDistanceToEntities,
+  minSegmentThreatDistance,
   nextFleeState,
+  pointToSegmentDistance,
   routeFirstLegPreferFactor,
   scoreRoute,
   scoreSingleDrop,
@@ -150,7 +153,53 @@ test("flee stale anchor refreshes away from current coin", () => {
   assert.notEqual(Number(next.evade.drop_id || 0), 1);
 });
 
-// --- Source wiring checks (PC userscript must mirror the pure fixes) ---
+// --- §5.2: 整条线段的路径安全(敌人在 1/4、3/4 位置也必须判危险) ---
+test("point-on-segment distance catches threat at 25% of the leg", () => {
+  // 线段 (0,0)->(100,0),敌人在 (25,30):到线段最近距离是 30(垂直投影中点)。
+  const d = minSegmentThreatDistance(0, 0, 100, 0, [{ x: 25, y: 30 }]);
+  assert.equal(d, 30, "敌人在 1/4 位置时整条路径最近距离应为 30");
+  // 端点/中点检查会得到 hypot(25,30)≈39,漏掉更危险的线段中部。
+  const endpointMid = Math.min(
+    Math.hypot(25 - 0, 30 - 0),
+    Math.hypot(25 - 50, 30 - 0)
+  );
+  assert.ok(d < endpointMid, "整条线段安全严格小于端点/中点检查");
+});
+
+test("pointToSegmentDistance equals endpoint distance when projection falls outside", () => {
+  assert.equal(pointToSegmentDistance(0, 0, 10, 10, 20, 10), Math.hypot(10, 10));
+  assert.ok(Math.abs(pointToSegmentDistance(15, 12, 10, 10, 20, 10) - 2) < 1e-9);
+});
+
+test("minSegmentThreatDistance returns Infinity with no threats", () => {
+  assert.equal(minSegmentThreatDistance(0, 0, 100, 0, []), Infinity);
+});
+
+// --- §5.3: 循环求最近距离,不分配数组、等价 Math.min--->
+test("minDistanceToEntities loops identically to Math.min(...map)", () => {
+  const entities = [{ x: 3, y: 4 }, { x: 8, y: 6 }, { x: 5, y: 12 }, { x: 30, y: 40 }];
+  const expect = Math.min(...entities.map(e => Math.hypot(e.x - 0, e.y - 0)));
+  assert.equal(minDistanceToEntities(0, 0, entities), expect);
+  assert.equal(minDistanceToEntities(0, 0, []), Infinity, "空列表应为 Infinity");
+});
+
+// --- Source wiring checks (PC / mobile userscript must mirror the pure fixes) ---
+test("PC userscript wires whole-segment safety + loop min distance", () => {
+  const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
+  const src = fs.readFileSync(srcPath, "utf8");
+  assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "PC source needs whole-leg safety");
+  assert.match(src, /minDistanceToEntities/, "PC source needs loop-based min distance");
+  assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "PC source must not Math.min(...map)");
+});
+
+test("mobile userscript wires whole-segment safety + loop min distance", () => {
+  const srcPath = path.join(root, "src", "grasp-rat-gold-runner-mobile.user.js");
+  const src = fs.readFileSync(srcPath, "utf8");
+  assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "mobile source needs whole-leg safety");
+  assert.match(src, /minDistanceToEntities/, "mobile source needs loop-based min distance");
+  assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "mobile source must not Math.min(...map)");
+});
+
 test("PC userscript wires coin reach / flee refresh / far-leg prefer", () => {
   const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
   const src = fs.readFileSync(srcPath, "utf8");

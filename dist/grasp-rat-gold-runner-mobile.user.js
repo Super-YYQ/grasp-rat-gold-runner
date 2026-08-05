@@ -2091,9 +2091,35 @@
         return startAutoFireBurst(me, target, targetName);
       }
 
+      function minDistanceToEntities(x, y, entities) {
+        let min = Infinity;
+        for (const entity of entities || []) {
+          const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
+          if (d < min) min = d;
+        }
+        return min;
+      }
+
+      function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+        const vx = bx - ax;
+        const vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
+        const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+        return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+      }
+
+      function minSegmentThreatDistance(ax, ay, bx, by, threats) {
+        let min = Infinity;
+        for (const t of threats || []) {
+          const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
+          if (d < min) min = d;
+        }
+        return min;
+      }
+
       function minRichEnemyDistanceAt(x, y, enemies) {
-        if (!enemies.length) return Infinity;
-        return Math.min(...enemies.map(enemy => Math.hypot(Number(enemy.x) - x, Number(enemy.y) - y)));
+        return minDistanceToEntities(x, y, enemies);
       }
 
       function travelTicks(fromX, fromY, toX, toY) {
@@ -2138,13 +2164,7 @@
         const seconds = travelSeconds(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y));
         const firstLeg = Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y));
         const cluster = dropClusterValue(drop, candidates);
-        const targetSafety = minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats);
-        const midSafety = minRichEnemyDistanceAt(
-          (Number(drop.x) + Number(me.x)) / 2,
-          (Number(drop.y) + Number(me.y)) / 2,
-          threats
-        );
-        const safety = Math.min(targetSafety, midSafety);
+        const safety = minSegmentThreatDistance(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y), threats);
         if (safety < RICH_ENEMY_KEEP_CM) return -Infinity;
         const safetyFactor = safety < RICH_ENEMY_SCAN_CM
           ? 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM))
@@ -2202,9 +2222,7 @@
       }
 
       function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
-        const targetSafety = minRichEnemyDistanceAt(toX, toY, threats);
-        const midSafety = minRichEnemyDistanceAt((fromX + toX) / 2, (fromY + toY) / 2, threats);
-        const safety = Math.min(targetSafety, midSafety);
+        const safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
         if (safety < RICH_ENEMY_KEEP_CM) return 0;
         if (safety >= RICH_ENEMY_SCAN_CM) return 1;
         return 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));

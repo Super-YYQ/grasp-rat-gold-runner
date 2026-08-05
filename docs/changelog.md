@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.7
+
+- 路径安全升级为整条线段判定（§5.2）：`scoreDrop` 与 `routeLegSafetyFactor` 从“只查端点/中点”改为 `minSegmentThreatDistance`（点到线段最近距离），敌人在 1/4、3/4 等线段中部位置也会被判危险并避开。
+- 移除 `Math.min(...threats.map)` / `Math.min(...enemies.map)` 数组展开（§5.3），改用循环版 `minDistanceToEntities`，避免大实体量下的临时数组与参数上限问题；PC 与手机端同步。
+- 纯逻辑沉淀到 `scripts/coin-nav-logic.mjs`（`pointToSegmentDistance` / `minSegmentThreatDistance` / `minDistanceToEntities`），`test-coin-nav.mjs` 新增 §5.2 敌人在 25% 位置判危险、§5.3 循环等价 `Math.min` 等用例与 PC/手机 wiring 检查。
+- src/dist 版本与 package.json 同步到 1.9.7。
+
 ## 1.9.6
 
 - 新增游戏契约检查（fail closed，审计 §4.5）：`classifyGameContract` 把 `state/entities/coinDrops/keys/currentUserId/sendVelocity` 与可选 `canvas/setPointerFromClient/screenCenter` 分级为 `READY / DEGRADED / INCOMPATIBLE`。缺失必需字段 → 停用自动移动/攻击并在 HUD 提示导出诊断，但保留血量离开、体力、非存活等安全逻辑；缺失画布/指针 → 只关自动攻击。`__crgrContract` 是纯只读分类器（无 GM/无状态权限），便于离线测试。

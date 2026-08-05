@@ -80,6 +80,36 @@ export function travelSeconds(fromX, fromY, toX, toY) {
   return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
 }
 
+/** §5.3: 循环求最近距离,不分配数组、无 Math.min(...) 参数上限问题。 */
+export function minDistanceToEntities(x, y, entities) {
+  let min = Infinity;
+  for (const entity of entities || []) {
+    const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+/** §5.2: 点到线段的最短距离(端点/中点可能漏判的 1/4、3/4 位置覆盖在内)。 */
+export function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+  const vx = Number(bx) - Number(ax);
+  const vy = Number(by) - Number(ay);
+  const len2 = vx * vx + vy * vy;
+  if (len2 <= 1e-9) return Math.hypot(Number(px) - Number(ax), Number(py) - Number(ay));
+  const t = Math.max(0, Math.min(1, ((Number(px) - Number(ax)) * vx + (Number(py) - Number(ay)) * vy) / len2));
+  return Math.hypot(Number(px) - (Number(ax) + t * vx), Number(py) - (Number(ay) + t * vy));
+}
+
+/** §5.2: 整条线段到最近威胁的距离。 */
+export function minSegmentThreatDistance(ax, ay, bx, by, threats) {
+  let min = Infinity;
+  for (const t of threats || []) {
+    const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
 export function routeLengthFactor(totalLegCm) {
   const lengthExcessCm = Math.max(0, (Number(totalLegCm) || 0) - ROUTE_LENGTH_PENALTY_START_CM);
   const lengthFactorBase = 1 - ROUTE_LENGTH_PENALTY_PER_CM * lengthExcessCm;

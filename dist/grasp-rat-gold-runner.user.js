@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.6
+// @version      1.9.7
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -3016,9 +3016,37 @@
         return startAutoFireBurst(me, target, targetName);
       }
 
+      // §5.2/§5.3:点到线段距离 + 循环求最小距离,替代 Math.min(...map)(避免临时数组/参数上限)。
+      function minDistanceToEntities(x, y, entities) {
+        let min = Infinity;
+        for (const entity of entities || []) {
+          const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
+          if (d < min) min = d;
+        }
+        return min;
+      }
+
+      function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+        const vx = bx - ax;
+        const vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
+        const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+        return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+      }
+
+      // 整条线段到最近威胁的距离(覆盖端点/中点未覆盖的 1/4、3/4 等位置),§5.2。
+      function minSegmentThreatDistance(ax, ay, bx, by, threats) {
+        let min = Infinity;
+        for (const t of threats || []) {
+          const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
+          if (d < min) min = d;
+        }
+        return min;
+      }
+
       function minRichEnemyDistanceAt(x, y, enemies) {
-        if (!enemies.length) return Infinity;
-        return Math.min(...enemies.map(enemy => Math.hypot(Number(enemy.x) - x, Number(enemy.y) - y)));
+        return minDistanceToEntities(x, y, enemies);
       }
 
       function travelTicks(fromX, fromY, toX, toY) {
@@ -3063,13 +3091,8 @@
         const seconds = travelSeconds(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y));
         const firstLeg = Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y));
         const cluster = dropClusterValue(drop, candidates);
-        const targetSafety = minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats);
-        const midSafety = minRichEnemyDistanceAt(
-          (Number(drop.x) + Number(me.x)) / 2,
-          (Number(drop.y) + Number(me.y)) / 2,
-          threats
-        );
-        const safety = Math.min(targetSafety, midSafety);
+        // 整条路径(从玩家到金币)到最近威胁的最近距离,而非只查端点/中点,§5.2。
+        const safety = minSegmentThreatDistance(Number(me.x), Number(me.y), Number(drop.x), Number(drop.y), threats);
         if (safety < RICH_ENEMY_KEEP_CM) return -Infinity;
         const safetyFactor = safety < RICH_ENEMY_SCAN_CM
           ? 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM))
@@ -3127,9 +3150,8 @@
       }
 
       function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
-        const targetSafety = minRichEnemyDistanceAt(toX, toY, threats);
-        const midSafety = minRichEnemyDistanceAt((fromX + toX) / 2, (fromY + toY) / 2, threats);
-        const safety = Math.min(targetSafety, midSafety);
+        // 整条腿到威胁的最近距离(§5.2),而非只查端点/中点。
+        const safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
         if (safety < RICH_ENEMY_KEEP_CM) return 0;
         if (safety >= RICH_ENEMY_SCAN_CM) return 1;
         return 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
@@ -3361,7 +3383,7 @@
           if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
           // 锚点必须远离所有 170m 逃离威胁敌人(包括当前这只),否则逃过去又陷入危险。
           if (threats.length) {
-            const minThreatDist = Math.min(...threats.map(t => Math.hypot(Number(t.x) - dx, Number(t.y) - dy)));
+            const minThreatDist = minDistanceToEntities(dx, dy, threats);
             if (!Number.isFinite(minThreatDist) || minThreatDist < FLEE_ANCHOR_SAFE_RADIUS_CM) continue;
           } else {
             const distFromEnemy = Math.hypot(dx - Number(enemy.x), dy - Number(enemy.y));
