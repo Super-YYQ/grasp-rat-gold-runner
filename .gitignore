@@ -13,3 +13,9 @@ Thumbs.db
 .env
 .env.*
 
+# Node deps
+node_modules/
+
+# 本机采集产物(含未脱敏 page.html / network),不应提交
+artifacts/
+
