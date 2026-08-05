@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<!--
+  test/fixtures/oauth-decoy-buttons.html
+  "诱饵按钮"fixture。页面上存在与授权无关、但包含"继续/确认""继续阅读"等词
+  的按钮。脚本必须只命中精确匹配的确权按钮,绝不点"继续阅读/确认退出"等干扰项。
+-->
+<head>
+  <meta charset="utf-8">
+  <title>Connect · 授权</title>
+</head>
+<body>
+  <main class="consent">
+    <h1>授权应用访问 LinuxDO 账户</h1>
+    <p>阅读协议后继续。</p>
+    <!-- 诱饵:文本含"继续",但不在确权表单内,文本也非白名单精确值 -->
+    <form method="post" action="https://connect.linux.do/somewhere/else">
+      <button type="button" class="btn-plain">继续阅读</button>
+    </form>
+    <form method="post" action="https://connect.linux.do/oauth2/authorize">
+      <button type="button" class="btn-pill btn-pill-primary">允许</button>
+    </form>
+  </main>
+</body>
+</html>

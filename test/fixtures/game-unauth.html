@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<!--
+  test/fixtures/game-unauth.html
+  游戏域名未登录页 fixture。结构来自仓库 1.9.3 实现与 Changelog 记录的真实契约：
+    <button class="join" id="joinBtn">LinuxDO 登录</button>
+  注意：这是"文档契约自举"的临时 fixture，尚未经真实本机采集确认。运行
+  scripts/capture-game-baseline.mjs 后用采集到的脱敏结构更新/替换本文件，
+  并清除下方 "provisional" 标记。
+-->
+<head>
+  <meta charset="utf-8">
+  <title>Grasp Rat - 登录</title>
+</head>
+<body>
+  <!-- 真实游戏页会有大量 UI;这里只保留脚本关心的最小可测结构。 -->
+  <main class="login-screen">
+    <button class="join" id="joinBtn">LinuxDO 登录</button>
+  </main>
+  <!-- provisional: 未采集确认 -->
+  <script>
+    var provisionalFixture = true;
+  </script>
+</body>
+</html>

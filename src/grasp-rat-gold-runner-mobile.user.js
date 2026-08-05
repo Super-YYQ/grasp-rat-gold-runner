@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner Mobile
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Mobile-focused Grasp Rat helper with long-press target, compact controls, hunt drawer, and fire lock drawer.
 // @match        https://grasp-rat-game.h-e.top/*
+// @noframes
 // @run-at       document-end
 // @grant        unsafeWindow
 // ==/UserScript==

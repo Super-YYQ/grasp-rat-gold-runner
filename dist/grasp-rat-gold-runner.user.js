@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.4
+// @version      1.9.5
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
-// @match        https://connect.linux.do/*
+// @match        https://connect.linux.do/oauth2/authorize*
+// @noframes
 // @run-at       document-end
 // @grant        unsafeWindow
 // @grant        GM_setValue
@@ -17,22 +18,34 @@
 
   // ---------- OAuth 授权页自动重连入口 ----------
   // 离开游戏后浏览器跳转到 connect.linux.do 授权页,需要在那个域名上也注入一段
-  // 轻量逻辑:读离开记录 -> 按类型算冷却 -> 冷却到期后自动点"允许"重回游戏。
+  // 轻量逻辑:读离开记录 -> 按类型算冷却 -> 精确结构匹配确权按钮(可选) -> 重回游戏。
   // 因 pageMain 运行在页面上下文(unsafeWindow.eval),访问不到 GM_* API,所以离开记录
-  // 的读写由本 IIFE 顶层(userscript 沙盒)负责,并通过 window 暴露桥接给 pageMain 调用。
+  // 的读写由本 IIFE 顶层(userscript 沙盒)负责,并通过 __crgrReconnect 暴露给 pageMain。
+  //
+  // 安全说明(Phase 1 范围):
+  //   本阶段把"未知结构一律 fail closed、失败进入明确终态、URL 严格校验、默认关闭"
+  //   等行为做到位,极大降低页面脚本伪造记录后的影响;但 bridge 仍驻留 unsafeWindow,
+  //   完整解除"页面可写 GM"需在 Phase 2 把主逻辑迁回 userscript 沙盒(见审计文档 §4.1)。
   const RECONNECT_COOLDOWN_LOWHP_MS = 30 * 60 * 1000;
   const RECONNECT_COOLDOWN_STAMINA_MS = 60 * 60 * 1000;
   // 自动重连只对“刚发生的这一轮离开”负责。超过冷却后再给一小段宽限期，
   // 避免旧记录在用户以后正常打开游戏时继续驱动登录/授权跳转。
   const RECONNECT_GRACE_MS = 10 * 60 * 1000;
-  const RECONNECT_AUTH_MAX_WAIT_MS = 5 * 60 * 1000;
+  // 各阶段的硬性 deadline(ms):到点未完成就进入明确终态而不是无声卡死。
+  const RECONNECT_NAV_DEADLINE_MS = 15 * 1000;          // 登录导航
+  const RECONNECT_AWAIT_CONSENT_MS = 2 * 60 * 1000;     // 授权等待
+  const RECONNECT_RETURN_DEADLINE_MS = 30 * 1000;       // 返回
+  const RECONNECT_MAX_NAV_ATTEMPTS = 2;                 // 导航失败最多回退重试次数
   const RECONNECT_LOGIN_SETTLE_MS = 2500;
   const RECONNECT_CRITICAL_HP = 25; // 与 pageMain 内 COMBAT_CRITICAL_HP 保持一致
   const RECONNECT_KEY_LEAVE = "crgrLeaveRecord";
   const RECONNECT_KEY_ACK = "crgrReconnectAck";
   const RECONNECT_KEY_FLOW = "crgrReconnectFlow";
   const RECONNECT_KEY_SWITCH = "crgrAutoReconnect";
+  const RECONNECT_KEY_CONSENT = "crgrConsentMode";
   const RECONNECT_AUTO_TYPES = new Set(["damage", "lowhp", "stamina"]);
+  // 状态机:进行中阶段(小写)与终态(大写)。任何终态出现后都不再自动点击/导航。
+  const RECONNECT_TERMINAL = new Set(["FAILED_RETRYABLE", "FAILED_MANUAL", "CANCELLED", "EXPIRED", "DONE"]);
 
   function gmGet(key) {
     try {
@@ -67,39 +80,101 @@
     return age <= reconnectCooldownMs(rec.type) + RECONNECT_GRACE_MS;
   }
 
+  // 随机 flowId(尽力与诊断标识;不需要保密)。优先 crypto,降级纯 JS。
+  function reconnectId() {
+    try {
+      if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+    } catch (_) {}
+    return "f" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  // 登录目标的 OAuth 链接必须可解析且 host/pathname 精确匹配;仅查询参数含
+  // "connect.linux.do/oauth2/authorize" 的表象不算数(防 URL 伪装)。
+  function isExpectedOAuthUrl(raw) {
+    try {
+      const url = new URL(String(raw || ""), location.href);
+      return url.protocol === "https:"
+        && url.hostname === "connect.linux.do"
+        && url.pathname === "/oauth2/authorize";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 授权逻辑只允许在 connect.linux.do 的精确 authorize 路径运行(与 @match 双保险)。
+  function isOAuthAuthorizePage() {
+    try {
+      return location.origin === "https://connect.linux.do"
+        && (location.pathname === "/oauth2/authorize" || location.pathname.indexOf("/oauth2/authorize/") === 0);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 新建 v3 流程记录:带 flowId/owner/lease/deadline,任何失败都写 lastError。
+  function newFlow(leave) {
+    const ts = Number(leave && leave.ts);
+    return {
+      version: 3,
+      flowId: reconnectId(),
+      ts: String(leave && leave.ts),
+      type: (leave && leave.type) || "damage",
+      phase: "leave",
+      reason: (leave && leave.reason) || "",
+      at: Date.now(),
+      dueAt: Number.isFinite(ts) ? ts + reconnectCooldownMs((leave && leave.type) || "damage") : 0,
+      deadline: 0,
+      ownerId: null,
+      leaseUntil: 0,
+      attempt: 0,
+      consentMode: reconnectReadConsentMode(),
+      lastError: null,
+      lastTransitionAt: Date.now()
+    };
+  }
+
+  function reconnectReadSwitch() {
+    return gmGet(RECONNECT_KEY_SWITCH) === true; // 默认关闭(安全优先,需显式开启)
+  }
+  function reconnectReadConsentMode() {
+    return gmGet(RECONNECT_KEY_CONSENT) === "STRICT_AUTO_CONSENT" ? "STRICT_AUTO_CONSENT" : "NAVIGATE_ONLY";
+  }
+
+  // 写流程记录并"乐观写后回读",返回写后读到的记录,供调用方确认 owner/phase。
+  function flowWriteMerge(ts, patch) {
+    const flow = gmGet(RECONNECT_KEY_FLOW);
+    if (!flow || String(flow.ts) !== String(ts)) return null;
+    const next = Object.assign({}, flow, patch, {
+      lastTransitionAt: Date.now()
+    });
+    gmSet(RECONNECT_KEY_FLOW, next);
+    return gmGet(RECONNECT_KEY_FLOW);
+  }
+
   // pageMain(页面上下文)通过该桥读写离开记录与重连开关;实现都在 userscript 沙盒。
+  // 注意:claimLoginFlow / claimAuthFlow / claimAck / flowWriteMerge 等属于流程状态推进,
+  // 只在沙盒内由两个 watcher 调用,不暴露给页面(pageMain 只需要记录/开关/读取)。
   const reconnectBridge = {
     readLeave() { return gmGet(RECONNECT_KEY_LEAVE) || null; },
     writeLeave(rec) { gmSet(RECONNECT_KEY_LEAVE, rec); },
     clearLeave() { gmDel(RECONNECT_KEY_LEAVE); },
     readFlow() { return gmGet(RECONNECT_KEY_FLOW) || null; },
     markLeaveFlow(ts) {
-      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "leave", at: Date.now(), v: 1 });
+      const leave = gmGet(RECONNECT_KEY_LEAVE);
+      if (!leave || String(leave.ts) !== String(ts)) return null;
+      const flow = newFlow(leave);
+      gmSet(RECONNECT_KEY_FLOW, flow);
+      return flow;
     },
-    claimLoginFlow(ts) {
-      const flow = gmGet(RECONNECT_KEY_FLOW);
-      if (!flow || String(flow.ts) !== String(ts)) return false;
-      if (flow.phase === "game-login" || flow.phase === "auth") return false;
-      if (flow.phase !== "leave") return false;
-      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "game-login", at: Date.now(), v: 1 });
-      return true;
-    },
-    claimAuthFlow(ts) {
-      const flow = gmGet(RECONNECT_KEY_FLOW);
-      if (!flow || String(flow.ts) !== String(ts)) return false;
-      if (flow.phase === "auth") return false;
-      if (flow.phase !== "game-login") return false;
-      gmSet(RECONNECT_KEY_FLOW, { ts, phase: "auth", at: Date.now(), v: 1 });
-      return true;
-    },
-    clearFlow() { gmDel(RECONNECT_KEY_FLOW); },
-    readSwitch() {
-      const v = gmGet(RECONNECT_KEY_SWITCH);
-      return v === false ? false : true; // 默认 true
-    },
+    readSwitch: reconnectReadSwitch,
     setSwitch(on) { gmSet(RECONNECT_KEY_SWITCH, !!on); },
+    readConsentMode: reconnectReadConsentMode,
+    setConsentMode(mode) {
+      gmSet(RECONNECT_KEY_CONSENT, mode === "STRICT_AUTO_CONSENT" ? "STRICT_AUTO_CONSENT" : "NAVIGATE_ONLY");
+    },
     readAck() { return gmGet(RECONNECT_KEY_ACK); },
     clearAck() { gmDel(RECONNECT_KEY_ACK); },
+    clearFlow() { gmDel(RECONNECT_KEY_FLOW); },
     claimAck(ts) {
       const ack = gmGet(RECONNECT_KEY_ACK);
       if (ack && String(ack) === String(ts)) return false;
@@ -112,7 +187,7 @@
     cooldownMs: reconnectCooldownMs,
     isRecordActive: reconnectRecordIsActive
   };
-  // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用
+  // 暴露到 unsafeWindow(优先),否则 window,供 pageMain 调用(见顶部安全说明)。
   try {
     if (typeof unsafeWindow !== "undefined") unsafeWindow.__crgrReconnect = reconnectBridge;
     else window.__crgrReconnect = reconnectBridge;
@@ -136,44 +211,76 @@
     return true;
   }
 
+  // 授权页"允许"按钮匹配。设计目标是 fail closed:
+  //   1) 必须先处于 connect.linux.do 精确 authorize 路径;
+  //   2) 精确结构 a.btn-pill.btn-pill-primary,或确权表单(action 满足 isExpectedOAuthUrl)
+  //      范围内的按钮;
+  //   3) 按钮文本必须是白名单【精确值】(整串匹配,不用 includes),
+  //     因此"继续阅读/确认退出"等诱饵不会命中;
+  //   4) 找不到精确结构 → 返回 null,绝不靠宽松关键词猜测点击。
   function findAuthorizeButton() {
-    const denyRe = /拒绝|取消|deny|cancel|decline|reject|refuse|不同意|不授权|不允许|not now/;
-    const allowRe = /允许|授权|authorize|accept|approve|继续|continue|确认|同意|allow|grant/;
-    // 1) 优先真实结构:<a class="btn-pill btn-pill-primary">允许</a>
+    if (!isOAuthAuthorizePage()) return null;
+    const denyRe = /拒绝|取消|deny|cancel|decline|reject|refuse|不同意|不授权|不允许|not now|退出|登出|logout/;
+    const allowExact = new Set(["允许", "授权", "同意", "确认", "authorize", "accept", "approve", "allow", "grant"]);
+    const normalize = s => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+    // 1) 精确结构:btn-pill-primary
     try {
-      const primary = document.querySelector("a.btn-pill.btn-pill-primary, .btn-pill-primary");
-      const primaryText = (primary && (primary.innerText || primary.textContent || "")).trim().toLowerCase();
-      if (primary && allowRe.test(primaryText) && !denyRe.test(primaryText) && isVisibleEnabledAction(primary)) {
-        return primary;
+      const primary = document.querySelector(
+        "a.btn-pill-primary, a.btn-pill.btn-pill-primary, button.btn-pill-primary, input.btn-pill-primary"
+      );
+      if (primary && isVisibleEnabledAction(primary)) {
+        const t = normalize(primary.innerText || primary.textContent || primary.value || "");
+        if (allowExact.has(t) && !denyRe.test(t)) return primary;
       }
     } catch (_) {}
-    // 2) 关键词回退
-    const keywords = ["允许", "authorize", "accept", "approve", "继续", "continue", "确认", "同意", "allow", "grant"];
-    const candidates = Array.from(
-      document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]")
-    );
-    for (const el of candidates) {
-      const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
-      if (!text) continue;
-      if (denyRe.test(text)) continue;
-      if (keywords.some(k => text.includes(k.toLowerCase())) && isVisibleEnabledAction(el)) return el;
-    }
+
+    // 2) 确权表单范围内的精确按钮
+    try {
+      const forms = Array.from(document.forms || []);
+      const targetForm = forms.find(f => {
+        const action = f.getAttribute && (f.getAttribute("action") || f.action || "");
+        return isExpectedOAuthUrl(action);
+      });
+      if (targetForm) {
+        const els = Array.from(targetForm.querySelectorAll(
+          "button, input[type='submit'], a[role='button'], input[type='button']"
+        )).filter(isVisibleEnabledAction);
+        for (const el of els) {
+          const t = normalize(el.innerText || el.textContent || el.value
+            || (el.getAttribute && el.getAttribute("value")) || "");
+          if (allowExact.has(t) && !denyRe.test(t)) return el;
+        }
+        return null; // 有确权表单但没有精确按钮 → fail closed
+      }
+    } catch (_) {}
+
+    // 3) 无确权容器/结构未知 → fail closed,绝不宽松匹配
     return null;
   }
 
   function oauthReconnectMain() {
     // 授权页只处理由本脚本刚刚发起的这一轮重连流程。
-    // 没有流程标记、已确认过或已过期的记录一律不碰按钮。
+    // 没有流程标记、已确认过或已过期的记录一律不碰按钮;结构未知时 fail closed。
     try {
+      if (!isOAuthAuthorizePage()) {
+        document.title = "[非授权页·自动重连不动作] " + (document.title || "");
+        return;
+      }
       if (!reconnectBridge.readSwitch()) {
         document.title = "[自动重连已关闭·不点允许] " + (document.title || "");
         return;
       }
+      const consentMode = reconnectBridge.readConsentMode();
       const rec = reconnectBridge.readLeave();
       const flow = reconnectBridge.readFlow();
       if (!reconnectBridge.isRecordActive(rec) || rec.enabled === false
         || !flow || !rec.ts || String(flow.ts) !== String(rec.ts)) {
         document.title = "[无有效重连流程·不点允许] " + (document.title || "");
+        return;
+      }
+      if (RECONNECT_TERMINAL.has(flow.phase)) {
+        document.title = "[重连已终止·" + flow.phase + "] " + (document.title || "");
         return;
       }
       const ack = reconnectBridge.readAck();
@@ -196,9 +303,14 @@
         document.title = "[未确认游戏页登录·不点允许] " + (document.title || "");
         return;
       }
-      // 在按钮尚未渲染出来时就锁定授权阶段，防止用户手动允许或页面刷新后，
-      // 游戏页又把同一条离开记录当成新的登录任务。
-      if (!reconnectBridge.claimAuthFlow(rec.ts)) {
+      // 默认 NAVIGATE_ONLY:只负责"把用户带到授权页",绝不自动点允许。
+      if (consentMode === "NAVIGATE_ONLY") {
+        document.title = "[请手动允许授权]" + (document.title ? " " + document.title : "");
+        return;
+      }
+      // STRICT_AUTO_CONSENT:仅精确契约匹配才自动允许。先在按钮渲染前锁定阶段,
+      // 防止用户手动允许或页面刷新后,游戏页又把同一条离开记录当成新的登录任务。
+      if (!flowWriteMerge(rec.ts, { phase: "auth", deadline: Date.now() + RECONNECT_AWAIT_CONSENT_MS })) {
         document.title = "[授权动作已占用·不重复点] " + (document.title || "");
         return;
       }
@@ -232,7 +344,8 @@
           const now = Date.now();
           if (!reconnectBridge.readSwitch() || !reconnectBridge.isRecordActive(current)
             || current.enabled === false || !current.ts || String(current.ts) !== String(rec.ts)
-            || !currentFlow || String(currentFlow.ts) !== String(rec.ts) || currentFlow.phase !== "auth") {
+            || !currentFlow || String(currentFlow.ts) !== String(rec.ts)
+            || currentFlow.phase !== "auth" || RECONNECT_TERMINAL.has(currentFlow.phase)) {
             clearInterval(poll);
             poll = 0;
             return;
@@ -249,45 +362,60 @@
           const dueAt = Number(current.ts) + cooldown;
           if (now < dueAt) {
             document.title = "[冷却中·不点允许] " + baseTitle;
-          } else {
-            const btn = findAuthorizeButton();
-            if (btn) {
-              hookManualAuthorize(btn);
-              // 流程已在按钮出现前抢占；这里先写 ack，最后才允许触发页面导航。
-              // 同页重复注入、重复刷新或多标签页都只能有一个胜者。
-              if (!reconnectBridge.claimAck(rec.ts)) {
-                clearInterval(poll);
-                poll = 0;
-                return;
-              }
-              clearInterval(poll);
-              poll = 0;
-              document.title = "[已点击允许·重连中] " + baseTitle;
-              try { btn.click(); } catch (_) {
-                try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
-              }
-              return;
-            }
-            document.title = "[等待授权页加载·找允许] " + baseTitle;
+            return;
           }
 
-          if (now - startedAt > RECONNECT_AUTH_MAX_WAIT_MS) {
+          // 授权结构未知/按钮超时未现 → 明确进入 FAILED_MANUAL,不再静默轮询到死。
+          if (now - startedAt > RECONNECT_AWAIT_CONSENT_MS) {
+            flowWriteMerge(rec.ts, {
+              phase: "FAILED_MANUAL",
+              deadline: now,
+              lastError: "授权按钮超时未见,页面结构未知,需要手动授权"
+            });
             clearInterval(poll);
             poll = 0;
-            document.title = "[重连流程等待超时·停止] " + baseTitle;
+            document.title = "[页面结构未知·需要手动授权] " + baseTitle;
+            return;
           }
-        } catch (_) {
-          // 单次异常:静默,下一拍继续
+
+          const btn = findAuthorizeButton();
+          if (btn) {
+            hookManualAuthorize(btn);
+            // 流程已在按钮出现前抢占;这里先写 ack,最后才允许触发页面导航。
+            // 同页重复注入、重复刷新或多标签页都只能有一个胜者。
+            if (!reconnectBridge.claimAck(rec.ts)) {
+              clearInterval(poll);
+              poll = 0;
+              return;
+            }
+            clearInterval(poll);
+            poll = 0;
+            document.title = "[已点击允许·重连中] " + baseTitle;
+            try { btn.click(); } catch (_) {
+              try { btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
+            }
+            return;
+          }
+          document.title = "[等待授权页加载·找允许] " + baseTitle;
+        } catch (err) {
+          // 单次异常:记入 lastError(不再完全静默),下一拍继续。
+          try { flowWriteMerge(rec.ts, { lastError: "授权轮询异常: " + String(err && err.message || err) }); } catch (_) {}
         }
       }, 400);
-    } catch (_) {
-      // 静默返回,绝不抛到页面
+    } catch (err) {
+      // 顶层异常不再被静默吞掉:标记 FAILED_RETRYABLE 并写 lastError。
+      try {
+        const f = reconnectBridge.readFlow();
+        if (f && f.ts) flowWriteMerge(f.ts, { phase: "FAILED_RETRYABLE", lastError: "授权流程异常: " + String(err && err.message || err), deadline: Date.now() });
+      } catch (_) {}
     }
   }
 
   // 在游戏域名页(登出态)找"LinuxDO 登录"入口:
-  // 优先精确锚定 #joinBtn(游戏页真实结构 <button class="join" id="joinBtn">LinuxDO 登录),
-  // 再找 href 含 connect.linux.do/oauth2/authorize 的跳转链接,最后文字回退。
+  //   1) 精确锚定 #joinBtn(游戏页真实结构 <button class="join" id="joinBtn">LinuxDO 登录);
+  //   2) href 满足 isExpectedOAuthUrl 的跳转链接(必须是 https://connect.linux.do/oauth2/authorize
+  //      的精确解析结果,仅查询字符串包含 connect.linux.do 的表象不算)。
+  // 两种都找不到 → 返回 null(绝不宽松关键词命中来导航)。
   function findLinuxDoLoginButton() {
     const denyRe = /离开|退出|exit|sign\s*out|log\s*out|logout|disconnect|不登录|取消/;
     // 1) 精确:游戏页真实按钮 id
@@ -295,28 +423,18 @@
       const btn = document.getElementById("joinBtn");
       if (btn && isVisibleEnabledAction(btn)) return btn;
     } catch (_) {}
-    // 2) 实际 OAuth 跳转链接
+    // 2) 严格 OAuth 跳转链接
     try {
-      const links = document.querySelectorAll('a[href*="connect.linux.do"], a[href*="oauth2/authorize"]');
+      const links = Array.from(document.querySelectorAll("a[href]"));
       for (const a of links) {
+        if (!isVisibleEnabledAction(a)) continue;
+        const href = a.getAttribute("href") || "";
+        if (!isExpectedOAuthUrl(href)) continue;
         const text = (a.innerText || a.textContent || "").trim().toLowerCase();
         if (denyRe.test(text)) continue;
-        const href = a.getAttribute("href") || "";
-        if (!/connect\.linux\.do|oauth2\/authorize/i.test(href)) continue;
-        if (!isVisibleEnabledAction(a)) continue;
         return a;
       }
     } catch (_) {}
-    // 3) 文字回退
-    const keywords = ["linuxdo", "linux.do", "登录", "login", "登入", "sign in", "connect"];
-    const candidates = Array.from(document.querySelectorAll("button, a[role='button'], input[type='submit'], a[href]"));
-    for (const el of candidates) {
-      const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
-      if (!text) continue;
-      if (denyRe.test(text)) continue;
-      if (el.tagName === "A" && !/connect\.linux\.do|oauth2\/authorize/i.test(el.getAttribute("href") || "")) continue;
-      if (keywords.some(k => text.includes(k.toLowerCase())) && isVisibleEnabledAction(el)) return el;
-    }
     return null;
   }
 
@@ -399,7 +517,32 @@
         // 此时绝不能因为登录入口短暂闪现又发起一轮登录。
         if (ack && String(ack) === String(rec.ts)) return;
         if (flow.phase !== "leave") {
-          // 已被本流程的另一实例占用，当前实例退出看护，不再重试。
+          // 终态:当前实例退出看护,不再重试。
+          if (RECONNECT_TERMINAL.has(flow.phase)) {
+            release();
+            return;
+          }
+          if (flow.phase === "game-login") {
+            // 导航后仍停留原页(可能 location 赋值被拦/失败):最多回退重试一次。
+            const flowAge = Date.now() - (Number(flow.lastTransitionAt) || Number(flow.at) || 0);
+            if (flowAge > RECONNECT_NAV_DEADLINE_MS) {
+              const attempt = (Number(flow.attempt) || 0) + 1;
+              if (attempt <= RECONNECT_MAX_NAV_ATTEMPTS) {
+                flowWriteMerge(rec.ts, { phase: "leave", attempt, deadline: 0, lastError: "登录导航回退重试" });
+                document.title = "[登录导航回退·重试] " + baseTitle;
+                return; // 下一拍重新抢占登录
+              }
+              flowWriteMerge(rec.ts, {
+                phase: "FAILED_MANUAL", deadline: Date.now(), attempt,
+                lastError: "登录导航失败超过重试上限,请手动登录"
+              });
+              release();
+              document.title = "[登录导航失败·请手动登录] " + baseTitle;
+              return;
+            }
+            return; // 仍在导航等待窗口内
+          }
+          // 其它占用/中间态:当前实例退出看护。
           release();
           return;
         }
@@ -437,26 +580,46 @@
         }
 
         try {
-          // 先持久化抢占结果，再触发一次导航；失败也不回退重试。
-          if (!reconnectBridge.claimLoginFlow(rec.ts)) {
+          // 先持久化抢占结果(phase: leave -> game-login),再触发一次导航。
+          const prev = reconnectBridge.readFlow();
+          if (!prev || prev.phase !== "leave" || RECONNECT_TERMINAL.has(prev.phase)) {
             jumped = true;
             release();
             return;
           }
-          // 优先用真实跳转链接 href 直接导航,比 click 更稳
-          const href = loginBtn.getAttribute && loginBtn.getAttribute("href");
+          const navId = reconnectId();
+          if (!flowWriteMerge(rec.ts, {
+            phase: "game-login",
+            deadline: Date.now() + RECONNECT_NAV_DEADLINE_MS,
+            ownerId: navId,
+            leaseUntil: Date.now() + RECONNECT_NAV_DEADLINE_MS
+          })) {
+            jumped = true;
+            release();
+            return;
+          }
           jumped = true;
           document.title = "[冷却到期·跳授权页] " + baseTitle;
           release();
-          if (href && !/^javascript:/i.test(href)) {
-            location.href = href;
-          } else {
+          if (loginBtn.id === "joinBtn" && !loginBtn.getAttribute("href")) {
+            // #joinBtn 无 href:交给游戏自己的 click 处理跳转。
             try { loginBtn.click(); } catch (_) {
-              loginBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+              try { loginBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (_e) {}
+            }
+          } else {
+            // 有 href 时必须严格校验为预期 OAuth 链接,否则拒绝导航(fail closed)。
+            const href = loginBtn.getAttribute && loginBtn.getAttribute("href");
+            if (href && isExpectedOAuthUrl(href) && !/^javascript:/i.test(href)) {
+              location.href = href;
+            } else {
+              // 结构未知/非法 href:不导航,交由手动处理。
+              flowWriteMerge(rec.ts, { phase: "FAILED_MANUAL", lastError: "登录链接不是预期 OAuth 地址,已 fail closed", deadline: Date.now() });
+              document.title = "[登录入口未知·请手动登录] " + baseTitle;
             }
           }
-        } catch (_) {
-          // 导航/点击失败也不自动重试，避免失败状态下向服务器重复发起登录。
+        } catch (err) {
+          // 导航/点击失败也不静默:标记终态,避免失败状态下反复重试。
+          try { flowWriteMerge(rec.ts, { phase: "FAILED_RETRYABLE", lastError: "登录导航异常: " + String(err && err.message || err), deadline: Date.now() }); } catch (_) {}
           release();
         }
       } catch (_) {
