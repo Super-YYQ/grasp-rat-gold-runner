@@ -13,6 +13,7 @@ import {
   minSegmentThreatDistance,
   nextFleeState,
   pointToSegmentDistance,
+  readDropAmount,
   routeFirstLegPreferFactor,
   scoreRoute,
   scoreSingleDrop,
@@ -183,6 +184,16 @@ test("minDistanceToEntities loops identically to Math.min(...map)", () => {
   assert.equal(minDistanceToEntities(0, 0, []), Infinity, "空列表应为 Infinity");
 });
 
+// --- §5.6: 金额缺失/非法不作为 1 追无效目标 ---
+test("readDropAmount returns null for missing / zero / non-finite / negative", () => {
+  assert.equal(readDropAmount({}), null);
+  assert.equal(readDropAmount({ amount: 0 }), null);
+  assert.equal(readDropAmount({ amount: "abc" }), null);
+  assert.equal(readDropAmount({ amount: -3 }), null);
+  assert.equal(readDropAmount({ amount: 5 }), 5);
+  assert.equal(readDropAmount({ amount: "12" }), 12);
+});
+
 // --- Source wiring checks (PC / mobile userscript must mirror the pure fixes) ---
 test("PC userscript wires whole-segment safety + loop min distance", () => {
   const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
@@ -190,6 +201,8 @@ test("PC userscript wires whole-segment safety + loop min distance", () => {
   assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "PC source needs whole-leg safety");
   assert.match(src, /minDistanceToEntities/, "PC source needs loop-based min distance");
   assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "PC source must not Math.min(...map)");
+  assert.match(src, /readDropAmount/, "PC source needs invalid-amount guard");
+  assert.match(src, /runner\.fleeing/, "PC source needs flee episode counting (§5.9)");
 });
 
 test("mobile userscript wires whole-segment safety + loop min distance", () => {
@@ -198,6 +211,8 @@ test("mobile userscript wires whole-segment safety + loop min distance", () => {
   assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "mobile source needs whole-leg safety");
   assert.match(src, /minDistanceToEntities/, "mobile source needs loop-based min distance");
   assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "mobile source must not Math.min(...map)");
+  assert.match(src, /readDropAmount/, "mobile source needs invalid-amount guard");
+  assert.match(src, /runner\.fleeing/, "mobile source needs flee episode counting (§5.9)");
 });
 
 test("PC userscript wires coin reach / flee refresh / far-leg prefer", () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.7
+// @version      1.9.8
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -1498,6 +1498,10 @@
         deltaBalance: 0,
         leaves: 0,
         avoidances: 0,
+        // §5.9: 规避计数按"事件"而非 tick。fleeing=当前是否处于持续逃离,
+        // fleeKey=当前威胁敌人 key;进入逃离或威胁换敌才 +1。
+        fleeing: false,
+        fleeKey: "",
         hourlyLimitLeaveTriggered: false,
         autoReconnect: false,
         // 游戏契约分级(审计文档 §4.5):READY / DEGRADED / INCOMPATIBLE + 缺失字段。
@@ -3061,6 +3065,12 @@
         return Math.max(1, Number(drop && drop.amount || 1));
       }
 
+      // §5.6:金额缺失/非法返回 null,不作为 1 去追无效目标(由候选过滤)。
+      function readDropAmount(drop) {
+        const value = Number(drop && drop.amount);
+        return Number.isFinite(value) && value > 0 ? value : null;
+      }
+
       function travelSeconds(fromX, fromY, toX, toY) {
         return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
       }
@@ -3121,13 +3131,17 @@
         const threats = enemies || richEnemies(me, RICH_ENEMY_SCAN_CM);
         const drops = Array.isArray(state.coinDrops) ? state.coinDrops : [];
         const candidates = drops
-          .map(drop => ({
-            ...drop,
-            amountValue: dropAmount(drop),
-            dist: Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y)),
-            richEnemyDist: minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats)
-          }))
-          .filter(drop => Number.isFinite(drop.dist) && Number.isFinite(Number(drop.x)) && Number.isFinite(Number(drop.y)));
+          .map(drop => {
+            const amountValue = readDropAmount(drop);
+            return {
+              ...drop,
+              amountValue,
+              dist: Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y)),
+              richEnemyDist: minRichEnemyDistanceAt(Number(drop.x), Number(drop.y), threats)
+            };
+          })
+          .filter(drop => drop.amountValue !== null
+            && Number.isFinite(drop.dist) && Number.isFinite(Number(drop.x)) && Number.isFinite(Number(drop.y)));
         const safeBase = (threats.length
           ? candidates.filter(drop => drop.richEnemyDist >= RICH_ENEMY_KEEP_CM)
           : candidates);
@@ -3470,7 +3484,12 @@
         }
         setDanger(urgent);
         clearCoinRoute();
-        runner.avoidances += 1;
+        // §5.9: 只在"进入逃离"或"威胁目标变化"时计入规避事件,避免 150ms tick 反复加。
+        if (!runner.fleeing || (runner.fleeKey && runner.fleeKey !== key)) {
+          runner.avoidances += 1;
+        }
+        runner.fleeing = true;
+        runner.fleeKey = key;
         runner.lastThreat = {
           name: enemy.name || ("User " + enemy.user_id),
           drop: enemy.dropForAvoid,
@@ -4412,6 +4431,8 @@
           }
           // 两类威胁都不在 170m/220m 范围内 → 已脱险,清掉撤离锚点状态,回到正常巡航/手动/金币规划。
           if (runner.fleeAnchor) runner.fleeAnchor = null;
+          runner.fleeing = false;
+          runner.fleeKey = "";
 
           if (handleCruiseProjectileDodge(me)) return;
 

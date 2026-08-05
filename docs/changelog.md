@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.8
+
+- 规避计数改按“事件”而非 tick（§5.9）：`avoidances` 只在进入逃离或威胁换敌时 +1，不再 150ms 循环反复累加；PC 与手机端同步。
+- 金币金额缺失/非法不再当作 1 去追无效目标（§5.6）：新增 `readDropAmount`，`coinCandidates` 过滤掉 `amount` 缺失/0/非有限/负数的掉落；PC 与手机端同步。
+- 纯逻辑沉淀到 `scripts/coin-nav-logic.mjs`（`readDropAmount`），`test-coin-nav.mjs` 新增金额越界用例与 §5.9 规避事件、§5.6 候选过滤的 PC/手机 wiring 检查。
+- src/dist 版本与 package.json 同步到 1.9.8。
+
 ## 1.9.7
 
 - 路径安全升级为整条线段判定（§5.2）：`scoreDrop` 与 `routeLegSafetyFactor` 从“只查端点/中点”改为 `minSegmentThreatDistance`（点到线段最近距离），敌人在 1/4、3/4 等线段中部位置也会被判危险并避开。

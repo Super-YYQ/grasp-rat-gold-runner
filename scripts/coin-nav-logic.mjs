@@ -90,6 +90,12 @@ export function minDistanceToEntities(x, y, entities) {
   return min;
 }
 
+/** §5.6: 金额缺失/非法返回 null,不作为 1 去追无效目标。 */
+export function readDropAmount(drop) {
+  const value = Number(drop && drop.amount);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** §5.2: 点到线段的最短距离(端点/中点可能漏判的 1/4、3/4 位置覆盖在内)。 */
 export function pointToSegmentDistance(px, py, ax, ay, bx, by) {
   const vx = Number(bx) - Number(ax);
