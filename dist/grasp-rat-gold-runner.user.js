@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.8
+// @version      1.9.9
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -1607,7 +1607,8 @@
         if (preserveUser) {
           clearScriptMoveKeys(false);
         } else {
-          for (const key of MOVE_KEYS) {
+          // §5.10:只清脚本自己添加的键,绝不删除用户真实按下的移动键。
+          for (const key of runner.scriptMoveKeys) {
             state.keys.delete(key);
           }
           runner.scriptMoveKeys.clear();

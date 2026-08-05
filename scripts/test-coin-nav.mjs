@@ -203,6 +203,8 @@ test("PC userscript wires whole-segment safety + loop min distance", () => {
   assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "PC source must not Math.min(...map)");
   assert.match(src, /readDropAmount/, "PC source needs invalid-amount guard");
   assert.match(src, /runner\.fleeing/, "PC source needs flee episode counting (§5.9)");
+  assert.match(src, /for \(const key of runner\.scriptMoveKeys\)/, "setVelocity must clear only script keys (§5.10)");
+  assert.doesNotMatch(src, /for \(const key of MOVE_KEYS\) \{\s*\n\s*state\.keys\.delete/, "must not delete user keys in setVelocity (§5.10)");
 });
 
 test("mobile userscript wires whole-segment safety + loop min distance", () => {
@@ -213,6 +215,8 @@ test("mobile userscript wires whole-segment safety + loop min distance", () => {
   assert.doesNotMatch(src, /Math\.min\(\.\.\.(threats|enemies)\.map/, "mobile source must not Math.min(...map)");
   assert.match(src, /readDropAmount/, "mobile source needs invalid-amount guard");
   assert.match(src, /runner\.fleeing/, "mobile source needs flee episode counting (§5.9)");
+  assert.match(src, /for \(const key of runner\.scriptMoveKeys\)/, "setVelocity must clear only script keys (§5.10)");
+  assert.doesNotMatch(src, /for \(const key of MOVE_KEYS\) \{\s*\n\s*state\.keys\.delete/, "must not delete user keys in setVelocity (§5.10)");
 });
 
 test("PC userscript wires coin reach / flee refresh / far-leg prefer", () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.9
+
+- 手动输入优先（§5.10）：`setVelocity` 的清理分支从“删除全部 MOVE_KEYS”收紧为“只清脚本自己添加的 `scriptMoveKeys`”，`stopMove()` 不再把用户真实按下的 WASD/方向键从 `state.keys` 删除；PC 与手机端同步。
+- `test-coin-nav.mjs` 增加 §5.10 wiring 检查（setVelocity 只清 scriptMoveKeys、不得整体删除 MOVE_KEYS）。
+- src/dist 版本与 package.json 同步到 1.9.9。
+
 ## 1.9.8
 
 - 规避计数改按“事件”而非 tick（§5.9）：`avoidances` 只在进入逃离或威胁换敌时 +1，不再 150ms 循环反复累加；PC 与手机端同步。

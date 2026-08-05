@@ -632,7 +632,8 @@
         if (preserveUser) {
           clearScriptMoveKeys(false);
         } else {
-          for (const key of MOVE_KEYS) {
+          // §5.10:只清脚本自己添加的键,绝不删除用户真实按下的移动键。
+          for (const key of runner.scriptMoveKeys) {
             state.keys.delete(key);
           }
           runner.scriptMoveKeys.clear();
