@@ -5,8 +5,8 @@
   LinuxDO Connect OAuth 授权页 fixture。授权按钮结构来自仓库注释记录的契约：
     <a class="btn-pill btn-pill-primary">允许</a>
   脚本只在明确匹配此结构 + 精确白名单文本 + 位于 /oauth2/authorize 时才会自动允许。
-  状态:仍为"文档契约自举"——采集 OAuth 确权页需要已登录的 LinuxDO 会话,本环境无账号,
-  需在测试账号/安全环境采集后替换。游戏未登录页 fixture 已确认(见 game-unauth.html)。
+  状态:确权页 DOM 仍待已登录会话采集;但 OAuth URL 契约已由真实游戏页确认
+  (2026-08-05,游戏页 /auth/linuxdo/start 返回的 auth_url)。
 -->
 <head>
   <meta charset="utf-8">
@@ -16,10 +16,13 @@
   <main class="consent">
     <h1>授权应用访问 LinuxDO 账户</h1>
     <p>将授予下列权限…</p>
-    <form method="post" action="https://connect.linux.do/oauth2/authorize">
+    <!-- 真实 OAuth 契约:https://connect.linux.do/oauth2/authorize?
+         response_type=code&client_id=b5nIdDfLLwO4Ax3ZPVNYp66CTc8fu1LC
+         &redirect_uri=https%3A%2F%2Fgrasp-rat-game.h-e.top%2Fauth%2Flinuxdo%2Fcallback&scope=read
+         isExpectedOAuthUrl 只校验 host=connect.linux.do + path=/oauth2/authorize,查询参数可变。 -->
+    <form method="post" action="https://connect.linux.do/oauth2/authorize?response_type=code&client_id=b5nIdDfLLwO4Ax3ZPVNYp66CTc8fu1LC&redirect_uri=https%3A%2F%2Fgrasp-rat-game.h-e.top%2Fauth%2Flinuxdo%2Fcallback&scope=read">
       <button type="button" class="btn-pill btn-pill-primary">允许</button>
     </form>
   </main>
-  <script>var provisionalFixture = true;</script>
 </body>
 </html>

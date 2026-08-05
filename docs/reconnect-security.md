@@ -63,3 +63,16 @@ Cookie/token/localStorage）。
 授权/登录选择器契约由 `test/fixtures/*.html` 驱动（经 `scripts/test-reconnect-dom.mjs` 的 jsdom
 测试）。真实页面结构改动前，先用 `npm run capture:baseline` 在用户本机 Chromium 采集未登录页，
 再更新 fixture——不要只靠注释里的“真实结构”。
+
+**已确认的真实契约（2026-08-05）**：游戏未登录页 `#joinBtn` 结构、以及游戏内登录走
+`/auth/linuxdo/start` 返回的 OAuth `auth_url`：
+
+```
+https://connect.linux.do/oauth2/authorize?response_type=code
+  &client_id=b5nIdDfLLwO4Ax3ZPVNYp66CTc8fu1LC
+  &redirect_uri=https%3A%2F%2Fgrasp-rat-game.h-e.top%2Fauth%2Flinuxdo%2Fcallback&scope=read
+```
+
+这与 `isExpectedOAuthUrl`（只校验 `host=connect.linux.do` + `path=/oauth2/authorize`，查询参数可变）
+完全一致，`oauth-consent.html` fixture 的 form action 已用该真实 URL，jsdom 测试证明其被接受。
+确权页**按钮 DOM** 仍需已登录 LinuxDO 会话采集。

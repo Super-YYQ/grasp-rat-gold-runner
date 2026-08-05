@@ -7,6 +7,13 @@
 - 纳入 `npm run test` 与 `release:check`。
 - PC src/dist 与 package.json 同步到 1.9.12；mobile 到 0.1.6。
 
+### 附加：OAuth URL 契约已由真实游戏页确认（2026-08-05）
+
+游戏内登录走 `/auth/linuxdo/start`，返回的 `auth_url` 为
+`https://connect.linux.do/oauth2/authorize?...&client_id=b5nIdDfLLwO4Ax3ZPVNYp66CTc8fu1LC&redirect_uri=.../auth/linuxdo/callback&scope=read`。
+与 `isExpectedOAuthUrl`（host=`connect.linux.do` + path=`/oauth2/authorize`，查询参数可变）完全一致；
+`oauth-consent.html` fixture 的 form action 已改用该真实 URL，jsdom 测试证明其被接受。确权页按钮 DOM 仍需已登录会话采集。
+
 ## 1.9.11
 
 - 修复到达金币后可能永久等待（§5.7，PC 与手机端同步）：贴近金币后先等 600ms 确认入账；若金币迟迟不消失，做最多 2 次小幅正交轻推；仍不消失则把该 `drop_id` 临时黑名单 8 秒并重规划，不再卡在原地。`coinCandidates` 与路线目标回退都会过滤黑名单金币。
