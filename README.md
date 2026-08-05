@@ -17,9 +17,9 @@
 
 搭配 Tampermonkey（篡改猴）使用：`https://www.tampermonkey.net/`
 
-PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/jzcangshu/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner.user.js)。
+PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner.user.js)。
 
-手机端脚本位于[dist/grasp-rat-gold-runner-mobile.user.js](https://github.com/jzcangshu/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner-mobile.user.js)。
+手机端脚本位于[dist/grasp-rat-gold-runner-mobile.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner-mobile.user.js)。
 
 ------
 

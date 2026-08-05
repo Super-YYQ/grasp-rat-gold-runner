@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.5
+
+- 自动重连默认改为关闭（`crgrAutoReconnect` 需显式开启），并新增 `NAVIGATE_ONLY` 授权模式：只把用户带到授权页，默认绝不自动点“允许”；需精确契约匹配才切到 `STRICT_AUTO_CONSENT`。
+- 授权页“允许”匹配收紧为 fail closed：必须位于 `connect.linux.do` 精确 `/oauth2/authorize` 路径，按钮为精确白名单文本（整串、不用 includes），作用域限定在 action 满足 `isExpectedOAuthUrl` 的确权表单或精确 `btn-pill-primary`；结构未知/诱饵（如“继续阅读”“确认退出”）一律不点，只提示手动授权。
+- 登录目标链接改用 `isExpectedOAuthUrl` 严格校验：必须解析为 `https://connect.linux.do/oauth2/authorize` 的 host/path covers，仅查询字符串含目标文本的伪装链接不再触发导航。
+- 新增 `@noframes`，并将 `connect.linux.do` 的 `@match` 收窄为 `/oauth2/authorize*`（drift 不再在任何 iframe 或非授权路径注入）。
+- 引入 v3 流程记录（`flowId`/`ownerId`/`leaseUntil`/`deadline`）与明确终态 `FAILED_RETRYABLE`/`FAILED_MANUAL`/`CANCELLED`/`EXPIRED`：授权按钮超时、登录导航失败、地址非法都会写入 `lastError` 并停止，不再静默轮询/永久停在“动作已占用”；刷新后按终态直接跳过。
+- 发布门禁：新增跨平台 `scripts/release-check.mjs`（版本一致、语法、src/dist 哈希、导航/重连/DOM fixture 测试、禁用 CSS），`test-reconnect-dom.mjs` 用 jsdom 对着真实 `test/fixtures/*.html` 校验选择器；`package.json` 版本与 PC userscript 同步为 1.9.5。
+- 新增 `scripts/capture-game-baseline.mjs`（用户本机真实 Chromium 采集未登录页契约）与 `test/fixtures/{game-unauth,oauth-consent,oauth-unknown-layout,oauth-decoy-buttons}.html`。仍在处理中的：解除 unsafeWindow 上 GM 写桥（Phase 2 沙盒迁移）。
+
 ## 1.9.4
 
 - 自动重连改为带持久流程阶段的单次状态机：无本脚本流程标记、过期记录、手动登录或手动允许时，不再自动点击登录/允许。
