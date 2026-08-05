@@ -247,6 +247,16 @@ test("PC userscript wires auto-attack safety (§6)", () => {
   assert.doesNotMatch(src, /getElementById\("world"\)\) \|\| document\.body/, "§6.3 no body fallback for fire");
 });
 
+// --- §5.7 到达金币确认/轻推/黑名单 wiring ---
+test("PC & mobile wire coin-arrival confirm/nudge/blacklist (§5.7)", () => {
+  for (const f of ["src/grasp-rat-gold-runner.user.js", "src/grasp-rat-gold-runner-mobile.user.js"]) {
+    const src = fs.readFileSync(path.join(root, f), "utf8");
+    assert.match(src, /coinArrivalNudges/, `${f} needs arrival-nudge state`);
+    assert.match(src, /coinBlacklist\.set\(id, nowArr \+ 8000/, `${f} needs temp blacklist on non-confirmed coin`);
+    assert.match(src, /isCoinBlacklisted/, `${f} needs blacklist filter`);
+  }
+});
+
 if (failed) {
   console.error(`\n${failed} failing test(s)`);
   process.exit(1);

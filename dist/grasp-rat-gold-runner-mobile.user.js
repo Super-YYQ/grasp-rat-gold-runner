@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner Mobile
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      0.1.4
+// @version      0.1.5
 // @description  Mobile-focused Grasp Rat helper with long-press target, compact controls, hunt drawer, and fire lock drawer.
 // @match        https://grasp-rat-game.h-e.top/*
 // @noframes
@@ -549,6 +549,11 @@
         routeTravelSeconds: 0,
         routeKind: "",
         routeAdvanced: false,
+        // §5.7:到达金币后的确认/轻推/临时黑名单状态。
+        coinArrivalId: null,
+        coinArrivalAt: 0,
+        coinArrivalNudges: 0,
+        coinBlacklist: new Map(),
         navTarget: null,
         planNextAt: 0,
         manualTarget: null,
@@ -2232,6 +2237,13 @@
         return { count, amount, weighted };
       }
 
+      function isCoinBlacklisted(id) {
+        const until = runner.coinBlacklist.get(Number(id));
+        if (until == null) return false;
+        if (until <= Date.now()) { runner.coinBlacklist.delete(Number(id)); return false; }
+        return true;
+      }
+
       function coinCandidates(me, enemies) {
         const threats = enemies || richEnemies(me, RICH_ENEMY_SCAN_CM);
         const drops = Array.isArray(state.coinDrops) ? state.coinDrops : [];
@@ -2246,6 +2258,7 @@
             };
           })
           .filter(drop => drop.amountValue !== null
+            && !isCoinBlacklisted(drop.drop_id)
             && Number.isFinite(drop.dist) && Number.isFinite(Number(drop.x)) && Number.isFinite(Number(drop.y)));
         const safeBase = (threats.length
           ? candidates.filter(drop => drop.richEnemyDist >= RICH_ENEMY_KEEP_CM)
@@ -2460,7 +2473,8 @@
 
         if (runner.targetId) {
           const target = drops.find(drop => Number(drop.drop_id) === Number(runner.targetId));
-          if (!target || minRichEnemyDistanceAt(Number(target.x), Number(target.y), threats) < RICH_ENEMY_KEEP_CM) {
+          if (!target || isCoinBlacklisted(target.drop_id)
+            || minRichEnemyDistanceAt(Number(target.x), Number(target.y), threats) < RICH_ENEMY_KEEP_CM) {
             clearCoinRoute();
             return null;
           }
@@ -3218,8 +3232,33 @@
           const dist = Math.hypot(rx, ry);
 
           if (dist <= COIN_REACHED_CM) {
-            stopMove();
-            runner.lastAction = "贴近金币 " + runner.targetId + "，等待入账";
+            // §5.7:贴近金币后先等确认;迟迟不入账则正交轻推;仍不消失则临时黑名单重规划。
+            const id = runner.targetId;
+            const nowArr = Date.now();
+            if (runner.coinArrivalId !== id) {
+              runner.coinArrivalId = id;
+              runner.coinArrivalAt = nowArr;
+              runner.coinArrivalNudges = 0;
+            }
+            if (nowArr - runner.coinArrivalAt < 600) {
+              stopMove();
+              runner.lastAction = "贴近金币 " + id + "，等待入账";
+              return;
+            }
+            if (runner.coinArrivalNudges < 2) {
+              runner.coinArrivalNudges += 1;
+              runner.coinArrivalAt = nowArr;
+              const len = Math.max(1, Math.hypot(rx, ry));
+              moveToward(-ry / len, rx / len);
+              runner.lastAction = "金币未入账·正交轻推 " + runner.coinArrivalNudges;
+              return;
+            }
+            runner.coinBlacklist.set(id, nowArr + 8000);
+            runner.coinArrivalId = null;
+            runner.coinArrivalAt = 0;
+            runner.coinArrivalNudges = 0;
+            clearCoinRoute();
+            runner.lastAction = "金币 " + id + " 未入账·临时跳过";
             return;
           }
 
