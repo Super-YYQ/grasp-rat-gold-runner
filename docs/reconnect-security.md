@@ -36,12 +36,27 @@
 
 各阶段有 deadline；到点未完成即写入 `lastError` 并停止，避免“永久卡在动作已占用”。
 
+## 清理与重试
+
+HUD 提供「清理重连」与「仅本次重试」：清理会清除 leave/ack/flow；仅本次重试按当前
+离开记录重建 leave 阶段流程，让看护当作一轮全新流程重试一次。
+
+## 游戏契约检查(fail closed,§4.5)
+
+`classifyGameContract` 把必需字段（`state`/`state.entities`/`state.coinDrops`/
+`state.keys`/`state.currentUserId`/`sendVelocity`）与关键可选字段
+（`canvas`/`setPointerFromClient`/`screenCenter`）分级为 `READY / DEGRADED /
+INCOMPATIBLE`。缺失必需字段 → 停用自动移动/攻击并提示导出诊断，但保留血量离开、
+体力、非存活等安全逻辑；缺失画布/指针 → 只关自动攻击。`__crgrContract` 是纯只读
+分类器（无 GM/无权限），`runner.exportDiagnostics()` 导出字段类型与重连摘要（不含
+Cookie/token/localStorage）。
+
 ## 明确未做（Phase 2 迁移）
 
 `reconnectBridge` 目前仍挂在 `unsafeWindow.__crgrReconnect`，因为 `pageMain` 运行在页面上下文，
 必须在离开/重入时读写 GM 记录。完全解除「页面脚本可写 GM」需要把主逻辑迁回 userscript 沙盒
-（审计文档 §4.1 / Phase 2）。本阶段已把“伪造/边界输入一律 fail closed + 默认关闭 + 显式终态”
-做到位，降低其影响。**尚未做**真实沙盒迁移与 HUD 上的“清理重连状态 / 本次手动重试”按钮。
+（审计文档 §4.1 / Phase 2）。本阶段已把“伪造/边界输入一律 fail closed + 默认关闭 + 显式终态
++ 契约分级”做到位，降低其影响。**尚未做**真实沙盒迁移。
 
 ## 采集与更新
 
