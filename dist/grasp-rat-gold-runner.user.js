@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.5
+// @version      1.9.6
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -110,6 +110,68 @@
       return false;
     }
   }
+
+  // ---- 游戏契约检查(fail closed,审计文档 §4.5)----
+  // 接收一个"字段名 -> 实际值"的 report,返回 READY / DEGRADED / INCOMPATIBLE 分级。
+  // 这是决策的唯一实现(pageMain 只负责构造 report 并应用返回的级别),
+  // 对外开放的 __crgrContract 是纯只读分类器(不读,不写,无 GM/无状态权限),
+  // 便于离线测试;页面即使调用它也只能对一个它自己给的 report 做分类,无能力加成。
+  function contractPresent(value, expectation) {
+    if (typeof value === "undefined" || value === null || value === false) return false;
+    if (expectation === "function") return typeof value === "function";
+    if (expectation === "array") return Array.isArray(value);
+    if (expectation === "Set-like") {
+      return value && (value instanceof Set || typeof value.add === "function"
+        || typeof value.has === "function" || typeof value.delete === "function");
+    }
+    if (expectation === "HTMLElement") {
+      return typeof value === "object" && typeof value.getContext === "function";
+    }
+    if (expectation === "present") return true;
+    if (expectation === "object") return typeof value === "object" && !Array.isArray(value);
+    return true;
+  }
+
+  // 预期契约:required 缺失 → INCOMPATIBLE(不注入控制);required 全在但某些
+  // 关键可选(画布/坐标/指针)缺失 → DEGRADED(自动移动/攻击关闭,只读展示)。
+  const GAME_CONTRACT_REQUIRED = [
+    ["state", "object"],
+    ["state.entities", "array"],
+    ["state.coinDrops", "array"],
+    ["state.keys", "Set-like"],
+    ["state.currentUserId", "present"],
+    ["sendVelocity", "function"]
+  ];
+  const GAME_CONTRACT_OPTIONAL_CRITICAL = [
+    ["canvas", "HTMLElement"],
+    ["setPointerFromClient", "function"],
+    ["screenCenter", "function"]
+  ];
+
+  function classifyGameContract(report) {
+    const out = { status: "READY", missing: [], criticalMissing: [], report: {} };
+    for (const [key, expect] of GAME_CONTRACT_REQUIRED) {
+      const value = report ? report[key] : undefined;
+      const ok = contractPresent(value, expect);
+      out.report[key] = ok ? expect : "missing";
+      if (!ok) out.missing.push(key);
+    }
+    for (const [key, expect] of GAME_CONTRACT_OPTIONAL_CRITICAL) {
+      const value = report ? report[key] : undefined;
+      const ok = contractPresent(value, expect);
+      out.report[key] = ok ? expect : "missing";
+      if (!ok) out.criticalMissing.push(key);
+    }
+    if (out.missing.length) out.status = "INCOMPATIBLE";
+    else if (out.criticalMissing.length) out.status = "DEGRADED";
+    else out.status = "READY";
+    return out;
+  }
+  try {
+    if (typeof unsafeWindow !== "undefined") {
+      unsafeWindow.__crgrContract = Object.freeze({ classify: classifyGameContract });
+    }
+  } catch (_) {}
 
   // 新建 v3 流程记录:带 flowId/owner/lease/deadline,任何失败都写 lastError。
   function newFlow(leave) {
@@ -839,6 +901,8 @@
         '      <button type="button" data-crgr="stop">停止</button>',
         '      <button type="button" data-crgr="combat">临时交战</button>',
         '      <button type="button" data-crgr="reconnect">重连 ON</button>',
+        '      <button type="button" data-crgr="reconnect-clear" title="清理重连流程/离开记录/ack">清理重连</button>',
+        '      <button type="button" data-crgr="reconnect-retry" title="清掉失败/终态后仅本次重试">仅本次重试</button>',
         '      <button type="button" data-crgr="leave">离开</button>',
         '    </div>',
         '    <pre data-crgr="status">READY</pre>',
@@ -1435,7 +1499,10 @@
         leaves: 0,
         avoidances: 0,
         hourlyLimitLeaveTriggered: false,
-        autoReconnect: true,
+        autoReconnect: false,
+        // 游戏契约分级(审计文档 §4.5):READY / DEGRADED / INCOMPATIBLE + 缺失字段。
+        contractStatus: "UNKNOWN",
+        contractReason: "",
         // 重连回游戏的"安全恢复态":刚通过自动重连回到游戏时进入,先不自动巡航,
         // 监控近身富敌和血量,确认安全后才恢复运行——避免几滴血出生在敌人旁边被秒。
         rejoinRecovery: false,
@@ -1461,13 +1528,51 @@
 
       window[RUNNER_KEY] = runner;
 
-      // 从 userscript 桥读取自动重连开关(持久化在 GM,跨域共享),默认开
+      // 从 userscript 桥读取自动重连开关(持久化在 GM,跨域共享),默认关
       try {
         const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
         if (bridge && typeof bridge.readSwitch === "function") {
           runner.autoReconnect = bridge.readSwitch();
         }
       } catch (_) {}
+
+      // 游戏契约探测(fail closed):构造字段报告,调用沙盒内唯一分类器分级。
+      // READY=全部必需+关键可选都在;DEGRADED=必需在但画布/指针缺失,读展示可用、
+      // 自动移动/攻击关闭;INCOMPATIBLE=必需缺失,不注入控制、提示导出诊断。
+      try {
+        const s = typeof state !== "undefined" ? state : null;
+        const d = typeof els !== "undefined" ? els : null;
+        const contractFields = {
+          "state": s,
+          "state.entities": s && s.entities,
+          "state.coinDrops": s && s.coinDrops,
+          "state.keys": s && s.keys,
+          "state.currentUserId": s && s.currentUserId,
+          "state.minimap": s && s.minimap ? s.minimap.points : undefined,
+          "state.pointerWorld": s && s.pointerWorld,
+          "sendVelocity": typeof sendVelocity !== "undefined" ? sendVelocity : undefined,
+          "canvas": (d && d.canvas) || (typeof canvas !== "undefined" ? canvas : undefined),
+          "screenCenter": (d && d.screenCenter) || (typeof screenCenter !== "undefined" ? screenCenter : undefined),
+          "setPointerFromClient": (d && d.setPointerFromClient) || (typeof setPointerFromClient !== "undefined" ? setPointerFromClient : undefined)
+        };
+        const classifier = (window.__crgrContract && window.__crgrContract.classify) || null;
+        const verdict = classifier ? classifier(contractFields) : null;
+        if (verdict) {
+          runner.contractStatus = verdict.status;
+          runner.contractReport = verdict.report || null;
+          runner.contractReason = verdict.missing.length
+            ? "缺失必需字段: " + verdict.missing.join(", ")
+            : verdict.criticalMissing.length
+              ? "缺失关键可选(画布/指针): " + verdict.criticalMissing.join(", ")
+              : "";
+          runner.stepReady = verdict.status !== "INCOMPATIBLE";
+          runner.fireReady = verdict.status === "READY";
+        }
+      } catch (_) {
+        runner.contractStatus = "UNKNOWN";
+        runner.stepReady = true;
+        runner.fireReady = true;
+      }
 
       const nowText = () => new Date().toLocaleTimeString();
       const push = message => {
@@ -3812,6 +3917,20 @@
         } catch (_) {}
       }
 
+      // "仅本次手动重试":清掉失败/终态流程与 ack,按当前离开记录重建 leave 阶段流程,
+      // 让看护视作一轮全新流程重试一次。
+      function retryReconnectOnce() {
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          const rec = bridge && bridge.readLeave ? bridge.readLeave() : null;
+          if (!bridge || !rec || !rec.ts) return;
+          if (typeof bridge.clearAck === "function") bridge.clearAck();
+          if (typeof bridge.markLeaveFlow === "function") bridge.markLeaveFlow(rec.ts);
+          push("重连状态已重置,仅本次重试");
+          renderStatus();
+        } catch (_) {}
+      }
+
       function clickLeave(reason, options) {
         if (runner.leaveInProgress) return false;
         const noReconnect = !!(options && options.noReconnect) || runner.rejoinRecovery;
@@ -4226,13 +4345,27 @@
             return;
           }
 
+          // 契约未知 → fail closed:只保留上层(血量离开/体力/非存活)安全逻辑,
+          // 停用自动移动/追杀/交战/攻击/金币巡航,并在 HUD 提示导出诊断。
+          if (runner.stepReady === false) {
+            stopMove();
+            setDanger(false);
+            runner.lastAction = runner.contractReason || "页面契约未知·停用自动移动";
+            return;
+          }
+
           trackEnemyMotion(Date.now());
 
           if (handleCombatMode(me, hp)) return;
 
           if (runner.autoFireMode) {
-            setStepInterval(AUTO_FIRE_LOOP_MS);
-            handleAutoFire(me);
+            if (runner.fireReady !== false) {
+              setStepInterval(AUTO_FIRE_LOOP_MS);
+              handleAutoFire(me);
+            } else {
+              runner.autoFireStatus = "页面契约不满足·自动攻击不可用";
+              setStepInterval(STEP_TICK_MS);
+            }
           } else {
             setStepInterval(STEP_TICK_MS);
           }
@@ -4481,6 +4614,10 @@
             + " / ROUTE " + (s.routeKind || "single") + ":" + (s.routeCount || 0)
             + " / SCORE " + s.targetScore
             + (s.autoFireMode ? " / FIRE " + s.autoFireStatus : "");
+        if (runner.contractStatus && runner.contractStatus !== "READY") {
+          ui.status.textContent += " / 契约 " + runner.contractStatus
+            + (runner.contractReason ? ":" + runner.contractReason : "");
+        }
         ui.combat.classList.toggle("active", !!s.combatMode);
         ui.combat.textContent = s.combatMode ? "交战 ON" : "临时交战";
         ui.autoFire.classList.toggle("active", !!s.autoFireMode);
@@ -4489,6 +4626,38 @@
         ui.hunt.textContent = s.huntMode ? "追杀 ON" : "追杀";
         ui.reconnect.classList.toggle("active", runner.autoReconnect !== false);
         ui.reconnect.textContent = runner.autoReconnect !== false ? "重连 ON" : "重连 OFF";
+      }
+
+      // 导出诊断:契约字段类型 + 重连摘要 + 页面指纹(不含 Cookie/token/localStorage)。
+      function exportContractDiagnostics() {
+        let rec = null;
+        let flow = null;
+        let mode = "NAVIGATE_ONLY";
+        try {
+          const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
+          if (bridge) {
+            const leave = bridge.readLeave ? bridge.readLeave() : null;
+            const f = bridge.readFlow ? bridge.readFlow() : null;
+            const m = bridge.readConsentMode ? bridge.readConsentMode() : null;
+            rec = leave ? { type: leave.type, enabled: !!leave.enabled, at: Number(leave.ts || 0) } : null;
+            flow = f ? { phase: f.phase, type: f.type, attempt: Number(f.attempt || 0), lastError: f.lastError || null } : null;
+            mode = m || "NAVIGATE_ONLY";
+          }
+        } catch (_) {}
+        return {
+          contract: {
+            status: runner.contractStatus || "UNKNOWN",
+            fieldTypes: runner.contractReport || null,
+            reason: runner.contractReason || ""
+          },
+          reconnect: {
+            enabled: runner.autoReconnect !== false,
+            consentMode: mode,
+            leave: rec,
+            flow
+          },
+          page: { url: location.href.replace(/[?#].*$/, ""), title: document.title || "" }
+        };
       }
 
       runner.start = start;
@@ -4501,6 +4670,7 @@
       runner.setManualTarget = setManualTarget;
       runner.clearManualTarget = clearManualTarget;
       runner.status = snapshot;
+      runner.exportDiagnostics = exportContractDiagnostics;
 
       window.addEventListener("contextmenu", handleContextMenu, true);
       window.addEventListener("keydown", handleMovementKeyDown, true);
@@ -4519,6 +4689,12 @@
       });
       ui.leave.addEventListener("click", () => clickLeave("manual"));
       ui.reconnect.addEventListener("click", toggleReconnect);
+      root.querySelector('[data-crgr="reconnect-clear"]').addEventListener("click", () => {
+        clearReconnectState();
+        push("已清理重连状态");
+        renderStatus();
+      });
+      root.querySelector('[data-crgr="reconnect-retry"]').addEventListener("click", retryReconnectOnce);
       ui.dropList.addEventListener("click", handleDropLeaderboardClick);
       ui.attackList.addEventListener("click", handleAttackListClick);
       ui.collapse.addEventListener("click", () => {

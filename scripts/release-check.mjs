@@ -50,6 +50,7 @@ for (const [src, dist] of pairs) {
 run({ file: process.execPath, args: ["scripts/test-coin-nav.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-reconnect-safety.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-reconnect-dom.mjs"] });
+run({ file: process.execPath, args: ["scripts/test-contract.mjs"] });
 
 // 5) 禁用 CSS(毛玻璃)
 const allUserscriptText = sources.map(s => fs.readFileSync(join(s), "utf8")).join("\n");

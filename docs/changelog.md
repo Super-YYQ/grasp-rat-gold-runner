@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.6
+
+- 新增游戏契约检查（fail closed，审计 §4.5）：`classifyGameContract` 把 `state/entities/coinDrops/keys/currentUserId/sendVelocity` 与可选 `canvas/setPointerFromClient/screenCenter` 分级为 `READY / DEGRADED / INCOMPATIBLE`。缺失必需字段 → 停用自动移动/攻击并在 HUD 提示导出诊断，但保留血量离开、体力、非存活等安全逻辑；缺失画布/指针 → 只关自动攻击。`__crgrContract` 是纯只读分类器（无 GM/无状态权限），便于离线测试。
+- 新增 `runner.exportDiagnostics()`（契约字段类型 + 重连摘要 + 页面 URL/标题，不含 Cookie/token/localStorage）。
+- HUD 新增「清理重连」「仅本次重试」按钮：清理会清除 leave/ack/flow；仅本次重试按当前离开记录重建 leave 阶段流程，让看护重试一次（§4.4/§7.5）。
+- 新增 `scripts/test-contract.mjs`（契约分级单测）并纳入 `release:check` 与 `npm test`。
+
 ## 1.9.5
 
 - 自动重连默认改为关闭（`crgrAutoReconnect` 需显式开启），并新增 `NAVIGATE_ONLY` 授权模式：只把用户带到授权页，默认绝不自动点“允许”；需精确契约匹配才切到 `STRICT_AUTO_CONSENT`。
