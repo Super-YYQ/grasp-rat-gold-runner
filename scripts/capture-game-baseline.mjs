@@ -26,7 +26,9 @@ const GAME_URL = "https://grasp-rat-game.h-e.top/";
 await fs.mkdir(outDir, { recursive: true });
 
 // 延迟;headless:false 保证是真实浏览器实例,与云端抓取环境不同。
-const browser = await chromium.launch({ headless: false });
+// 可用环境变量 CRGR_HEADLESS=1 强制 headless(供 CI/无头探测,不弹窗口)。
+const headless = process.env.CRGR_HEADLESS === "1";
+const browser = await chromium.launch({ headless });
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
   locale: "zh-CN"

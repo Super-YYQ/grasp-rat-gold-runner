@@ -164,6 +164,10 @@ const now0 = Date.now();
   ctx.runTimers(); // 超过 settle
   const flow = ctx.gm.get("crgrReconnectFlow");
   assert.equal(flow.phase, "game-login", "抢占 game-login");
+  // 选择器必须命中 #joinBtn,绝不点 mobileJoinBtn(文本"登录")/leaveBtn 等诱饵。
+  assert.equal(ctx.clicks.filter(c => c === "mobileJoinBtn").length, 0, "不点手机端登录诱饵");
+  assert.equal(ctx.clicks.filter(c => c === "leaveBtn").length, 0, "不点离开按钮");
+  assert.equal(ctx.clicks.filter(c => c === "joinBtn").length, 1, "命中 #joinBtn");
   // 若 fixture 里 #joinBtn 无 href,走 click;jsdom 中 location 不变但点击发生。
   const joinClicks = ctx.clicks.filter(c => c === "joinBtn").length;
   assert.ok(joinClicks === 0 || ctx.document.getElementById("joinBtn").hasAttribute("href") === false,
