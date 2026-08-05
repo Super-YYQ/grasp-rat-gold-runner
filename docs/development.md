@@ -9,7 +9,7 @@
 ## 版本流程
 
 1. 修改 `src/grasp-rat-gold-runner.user.js`。
-2. 更新 userscript 头部 `@version` 和 `package.json` 版本。
+2. 更新 userscript 头部 `@version` 和 `package.json` 版本（`node scripts/check-userscript-version.mjs` 会校验一致）。
 3. 更新 `docs/changelog.md`。
 4. 同步发布版：
 
@@ -17,10 +17,10 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sync-dist.ps1
 ```
 
-5. 执行发布检查：
+5. 执行发布检查（跨平台，含语法、src/dist 哈希、导航/重连/DOM/契约测试、版本一致、禁用 CSS）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release-check.ps1
+npm run release:check
 ```
 
 6. 提交并推送：
@@ -31,6 +31,25 @@ git add .
 git commit -m "..."
 git push
 ```
+
+## 测试
+
+- `npm run test:nav`：金币/逃离纯逻辑（`scripts/coin-nav-logic.mjs` 驱动）。
+- `npm run test:reconnect`：重连状态机（vm 注入真实 userscript）。
+- `npm run test:reconnect-dom`：jsdom 对着 `test/fixtures/*.html` 跑真实选择器。
+- `npm run test:contract`：游戏契约分级（READY/DEGRADED/INCOMPATIBLE）。
+- `npm run test` 一次性运行以上全部。
+
+## 页面基线采集
+
+改任何登录/授权选择器前，先在用户本机 Chromium 采集未登录页契约（不登录、不点 `#joinBtn`）：
+
+```powershell
+npx playwright install
+npm run capture:baseline
+```
+
+产物落在 `artifacts/game-baseline/`（已 gitignore），脱敏后据此更新 `test/fixtures/*.html`。
 
 ## UI 性能规则
 
