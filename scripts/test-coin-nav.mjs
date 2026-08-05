@@ -237,6 +237,16 @@ test("mobile userscript shares coin reach fix", () => {
   assert.match(src, /ROUTE_NEAR_PREFER_CM|routeFirstLegPreferFactor|ROUTE_FAR_SOFT_CM/, "mobile needs far-leg prefer");
 });
 
+// --- §6 自动攻击安全化(PC) wiring ---
+test("PC userscript wires auto-attack safety (§6)", () => {
+  const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
+  const src = fs.readFileSync(srcPath, "utf8");
+  assert.match(src, /AUTO_FIRE_RESERVE_SHOTS/, "§6.1 whole-group stamina reserve");
+  assert.match(src, /burstTargetStillValid/, "§6.2 fresh-target mid-burst abort");
+  assert.match(src, /plannedShots/, "§6.4 planned-shots accounting");
+  assert.doesNotMatch(src, /getElementById\("world"\)\) \|\| document\.body/, "§6.3 no body fallback for fire");
+});
+
 if (failed) {
   console.error(`\n${failed} failing test(s)`);
   process.exit(1);

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.10
+
+- 自动攻击安全化（§6，PC 与手机端同步）：
+  - §6.1 整组连发体能预算：按 `floor(stamina / 每发成本) - reserve(2发)` 封顶实际发数，不再“只查一发够不够”后随机 5-8 发打空体力；预算不足不发、保留退出/躲避余量。
+  - §6.2 开火目标必须持续存活：`burstTargetStillValid` 校验目标可见、`Alive`、HP>0；目标消失/死亡/退出视野时立即释放本组，不再沿用旧坐标继续开火。
+  - §6.3 找不到已确认 world canvas 时返回 `null`，`dispatchAutoFireMouse` 不再回退到 `document.body` 派发鼠标事件（fail closed）。
+  - §6.4 统计改名为 `plannedShots`（计划发数），与“确认发数 confirmedShots”区分。
+- `test-coin-nav.mjs` 增加 §6 wiring 检查（reserve、fresh-target、plannedShots、无 body 回退）。
+- PC src/dist 与 package.json 同步到 1.9.10；mobile 到 0.1.4。
+
 ## 1.9.9
 
 - 手动输入优先（§5.10）：`setVelocity` 的清理分支从“删除全部 MOVE_KEYS”收紧为“只清脚本自己添加的 `scriptMoveKeys`”，`stopMove()` 不再把用户真实按下的 WASD/方向键从 `state.keys` 删除；PC 与手机端同步。

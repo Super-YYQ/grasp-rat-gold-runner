@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Gold Runner
 // @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.9
+// @version      1.9.10
 // @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -765,6 +765,7 @@
     const AUTO_FIRE_LOOP_MS = 100;
     const AUTO_FIRE_STAMINA_COST_MILLI = 500;
     const AUTO_FIRE_STAMINA_MAX_MILLI = 10000;
+    const AUTO_FIRE_RESERVE_SHOTS = 2; // §6.1:为退出/躲避保留的连发余量(发)。
     const AUTO_FIRE_LEAD_MIN_MS = 60;
     const AUTO_FIRE_LEAD_MAX_MS = 1150;
     const AUTO_FIRE_BURST_MIN_SHOTS = 5;
@@ -1479,9 +1480,10 @@
         autoFireBursting: false,
         autoFireBurstTimers: [],
         autoFireBurstClient: null,
-        autoFireShots: 0,
         autoFireTarget: "",
         autoFireStatus: "OFF",
+        // §6.4:统计的是"计划发数";若游戏提供弹药/体力确认再记 confirmedShots。
+        plannedShots: 0,
         attackLockUserId: null,
         attackLockName: "",
         attackLockStatus: "AUTO",
@@ -2346,6 +2348,17 @@
         return decorateAttackEnemy(target);
       }
 
+      // §6.2:开火目标必须仍存活且可见,否则不能继续锁定旧坐标。
+      function burstTargetStillValid(me, enemy) {
+        if (!enemy || enemy.user_id == null) return false;
+        const fresh = visibleAttackTargetById(me, enemy.user_id);
+        if (!fresh || fresh === null) return false;
+        if (fresh.life !== "Alive") return false;
+        const hp = Number(fresh.hp || 0);
+        if (!Number.isFinite(hp) || hp <= 0) return false;
+        return true;
+      }
+
       function clearAttackLock(reason) {
         if (runner.attackLockUserId === null) return;
         const name = runner.attackLockName || ("#" + runner.attackLockUserId);
@@ -2860,7 +2873,8 @@
       }
 
       function worldCanvasElement() {
-        return (typeof canvas !== "undefined" ? canvas : document.getElementById("world")) || document.body;
+        // §6.3:没有已确认的 world canvas 就返回 null,绝不回退 document.body 派发鼠标事件。
+        return (typeof canvas !== "undefined" ? canvas : document.getElementById("world")) || null;
       }
 
       function autoFireCoverageOffsets(me, target, count) {
@@ -2897,6 +2911,7 @@
 
       function dispatchAutoFireMouse(client, type, buttons) {
         const target = worldCanvasElement();
+        if (!target) return; // §6.3:无已确认画布时绝不向 body 派发鼠标事件
         if (typeof setPointerFromClient === "function") {
           try {
             setPointerFromClient(client.x, client.y);
@@ -2937,15 +2952,27 @@
 
       function startAutoFireBurst(me, target, targetName) {
         const stamina = Number(me && me.stamina_5s_remaining_milli);
-        if (Number.isFinite(stamina) && stamina < AUTO_FIRE_STAMINA_COST_MILLI) {
+        // §6.1:为整组连发预留体能预算,并保留余量用于退出/躲避,而不是只查"一发够不够"。
+        let shots = randomInt(AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS);
+        if (Number.isFinite(stamina)) {
+          const affordable = Math.max(0, Math.floor(stamina / AUTO_FIRE_STAMINA_COST_MILLI) - AUTO_FIRE_RESERVE_SHOTS);
+          if (affordable < AUTO_FIRE_BURST_MIN_SHOTS) {
+            runner.autoFireStatus = "体力不足(整组预算)";
+            return false;
+          }
+          shots = Math.min(shots, affordable);
+        } else if (stamina < AUTO_FIRE_STAMINA_COST_MILLI) {
           runner.autoFireStatus = "体力不足";
           return false;
         }
-        const shots = randomInt(AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS);
         const offsets = autoFireCoverageOffsets(me, target, shots);
         const firstClient = autoFireBurstClient(me, target, offsets[0], 0);
         if (!firstClient) {
           runner.autoFireStatus = "目标超出画面";
+          return false;
+        }
+        if (!burstTargetStillValid(me, target)) {
+          runner.autoFireStatus = "目标已消失·不启动";
           return false;
         }
 
@@ -2953,7 +2980,7 @@
         runner.autoFireBursting = true;
         runner.autoFireBurstClient = firstClient;
         runner.autoFireLastAt = Date.now();
-        runner.autoFireShots += shots;
+        runner.plannedShots += shots;
         runner.autoFireTarget = targetName;
         runner.autoFireStatus = "连发 " + shots + " 发 " + targetName
           + " / " + Math.round(target.dist / 100) + "m";
@@ -2965,6 +2992,13 @@
           scheduleAutoFireBurst(() => {
             const currentMe = getMe();
             if (!currentMe || !runner.autoFireBursting) return;
+            // §6.2:目标已消失/死亡/退出视野 → 立即释放,不再沿用旧坐标继续开火。
+            if (!burstTargetStillValid(currentMe, target)) {
+              clearAutoFireBurst(true);
+              runner.autoFireStatus = "目标已消失·中止";
+              renderStatus();
+              return;
+            }
             const client = autoFireBurstClient(currentMe, target, offsets[i], i);
             if (!client) return;
             runner.autoFireBurstClient = client;
@@ -4590,7 +4624,7 @@
           autoFireMode: runner.autoFireMode,
           autoFireStatus: runner.autoFireStatus,
           autoFireTarget: runner.autoFireTarget,
-          autoFireShots: runner.autoFireShots,
+          plannedShots: runner.plannedShots,
           attackLockUserId: runner.attackLockUserId,
           attackLockName: runner.attackLockName,
           attackLockStatus: runner.attackLockStatus,
