@@ -38,6 +38,7 @@ git push
 - `npm run test:reconnect`：重连状态机（vm 注入真实 userscript）。
 - `npm run test:reconnect-dom`：jsdom 对着 `test/fixtures/*.html` 跑真实选择器。
 - `npm run test:contract`：游戏契约分级（READY/DEGRADED/INCOMPATIBLE）。
+- `npm run test:spatial`：§5.1 空间哈希网格（正确性对照 + P95 性能预算）。
 - `npm run test` 一次性运行以上全部。
 
 ## 页面基线采集
