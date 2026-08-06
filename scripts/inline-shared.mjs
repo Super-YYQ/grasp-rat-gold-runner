@@ -18,17 +18,18 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 
-// 从 ES module 源码提取"函数声明文本"(去掉 export 前缀与模块级 import)。
-// 返回数组,每个元素是一个完整函数声明(含函数体)。
-function extractFunctionDecls(modulePath) {
+// 从 ES module 源码提取"可内联声明文本"(去掉 export 前缀与模块级 import)。
+// 返回数组:包含 `export function` 与 `export const`(对象/字面量)声明。
+// 函数体配平花括号;const 取到行尾(`export const X = {...};` 或 `export const X = 1;`)。
+function extractDecls(modulePath) {
   const src = fs.readFileSync(modulePath, "utf8");
   const decls = [];
-  const re = /^export\s+function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
+
+  // export function
+  const fnRe = /^export\s+function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
   let m;
-  while ((m = re.exec(src))) {
-    const name = m[1];
+  while ((m = fnRe.exec(src))) {
     const start = m.index;
-    // 找到函数体的起始 { 与匹配的 }
     const bodyStart = src.indexOf("{", m.index + m[0].length);
     if (bodyStart < 0) continue;
     let depth = 0;
@@ -42,21 +43,65 @@ function extractFunctionDecls(modulePath) {
       }
     }
     if (end < 0) continue;
-    let decl = src.slice(start, end);
-    // 去掉 "export " 前缀
-    decl = decl.replace(/^export\s+/, "");
+    let decl = src.slice(start, end).replace(/^export\s+/, "");
     decls.push(decl);
   }
+
+  // export const (对象/数组/字面量声明,取到语句结束)
+  const constRe = /^export\s+const\s+([A-Za-z_$][\w$]*)\s*=/gm;
+  while ((m = constRe.exec(src))) {
+    const start = m.index;
+    // 从 = 后开始找:若为 { 或 [ 则配平,否则到分号
+    const eq = src.indexOf("=", m.index);
+    const afterEq = eq + 1;
+    let end = -1;
+    const first = src[afterEq];
+    if (first === "{" || first === "[") {
+      const open = first;
+      const close = open === "{" ? "}" : "]";
+      let depth = 0;
+      for (let i = afterEq; i < src.length; i++) {
+        const c = src[i];
+        if (c === open) depth++;
+        else if (c === close) { depth--; if (depth === 0) { end = i + 1; break; } }
+      }
+    } else {
+      const semi = src.indexOf(";", afterEq);
+      end = semi < 0 ? src.length : semi + 1;
+    }
+    if (end < 0) continue;
+    let decl = src.slice(start, end).replace(/^export\s+/, "");
+    decls.push(decl);
+  }
+
   return decls;
+}
+
+// 收集 esbuild/引擎会合法的标识符名判断:entry 内已声明过的 const/let/function 名。
+// 用于跳过会与 pageMain 已有常量冲突的模块级 const(函数体内引用将解析到 pageMain 同名常量)。
+function declaredNames(entrySource) {
+  const names = new Set();
+  const re = /(?:const|let|function|class)\s+([A-Za-z_$][\w$]*)/g;
+  let m;
+  while ((m = re.exec(entrySource))) names.add(m[1]);
+  return names;
+}
+
+// 跳过 name 已在 entry 中声明的 const 声明(避免重复声明被 esbuild 改名为 X2)。
+function isConstCollision(declText, entryNames) {
+  const m = /^const\s+([A-Za-z_$][\w$]*)\s*=/.exec(declText);
+  return !!(m && entryNames.has(m[1]));
 }
 
 // 内联文本:按依赖顺序拼接所有共享函数声明。
 // desktop 与 mobile 共用同一套共享模块(纯逻辑),因此内联文本相同。
-// Phase 3 起加入 src/game 的 adapter 纯函数(contract/state/control/coordinate/entity)。
-export function sharedInlineText() {
+// Phase 3 加 src/game adapter;Phase 4 加 src/core(scheduler/state-machine/arbiter)。
+// 注意:模块级 const 若与 pageMain 已有常量同名,则跳过(函数体引用 pageMain 版本)。
+export function sharedInlineText(entrySource) {
   const sharedDir = path.join(root, "src", "shared");
   const navDir = path.join(root, "src", "strategy", "navigation");
   const gameDir = path.join(root, "src", "game");
+  const coreDir = path.join(root, "src", "core");
   const modules = [
     path.join(sharedDir, "ids.js"),
     path.join(sharedDir, "numbers.js"),
@@ -67,12 +112,18 @@ export function sharedInlineText() {
     path.join(gameDir, "entity-normalizer.js"),
     path.join(gameDir, "state-adapter.js"),
     path.join(gameDir, "control-adapter.js"),
-    path.join(gameDir, "coordinate-adapter.js")
+    path.join(gameDir, "coordinate-adapter.js"),
+    path.join(coreDir, "action-types.js"),
+    path.join(coreDir, "action-arbiter.js"),
+    path.join(coreDir, "state-machine.js"),
+    path.join(coreDir, "scheduler.js")
   ];
+  const entryNames = declaredNames(entrySource || "");
   const parts = [];
-  parts.push("    // ---- src/shared + src/strategy + src/game 内联(Phase 2/3,单一真相源) ----");
+  parts.push("    // ---- src/shared + src/strategy + src/game + src/core 内联(Phase 2/3/4,单一真相源) ----");
   for (const mod of modules) {
-    for (const decl of extractFunctionDecls(mod)) {
+    for (const decl of extractDecls(mod)) {
+      if (isConstCollision(decl, entryNames)) continue; // pageMain 已有同名常量
       parts.push("    " + decl.replace(/\n/g, "\n    "));
     }
   }

@@ -37,7 +37,7 @@ function stripEntryComments(code) {
 function prepareEntry(entry) {
   const srcPath = path.join(root, entry);
   const raw = fs.readFileSync(srcPath, "utf8");
-  const inlined = spliceSharedInline(raw, sharedInlineText());
+  const inlined = spliceSharedInline(raw, sharedInlineText(raw));
   const tmp = path.join(artifactsDir, "prepared-" + path.basename(entry));
   fs.mkdirSync(artifactsDir, { recursive: true });
   fs.writeFileSync(tmp, inlined, "utf8");
