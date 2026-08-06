@@ -121,6 +121,7 @@ function isConstCollision(declText, entryNames) {
 export function sharedInlineText(entrySource) {
   const sharedDir = path.join(root, "src", "shared");
   const navDir = path.join(root, "src", "strategy", "navigation");
+  const safetyDir = path.join(root, "src", "strategy", "safety");
   const gameDir = path.join(root, "src", "game");
   const coreDir = path.join(root, "src", "core");
   const modules = [
@@ -132,6 +133,9 @@ export function sharedInlineText(entrySource) {
     path.join(navDir, "route-score.js"),
     path.join(navDir, "route-planner.js"),
     path.join(navDir, "arrival-controller.js"),
+    path.join(safetyDir, "threat-model.js"),
+    path.join(safetyDir, "flee-planner.js"),
+    path.join(safetyDir, "leave-policy.js"),
     path.join(gameDir, "contract.js"),
     path.join(gameDir, "entity-normalizer.js"),
     path.join(gameDir, "state-adapter.js"),
