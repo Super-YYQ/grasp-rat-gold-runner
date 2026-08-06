@@ -1593,7 +1593,7 @@
       };
 
       function getMe() {
-        return state.entities.find(entity => Number(entity.user_id) === Number(state.currentUserId));
+        return state.entities.find(entity => idKey(entity.user_id) === idKey(state.currentUserId));
       }
 
       function clearScriptMoveKeys(send) {
@@ -1741,8 +1741,8 @@
           clearCoinRoute();
           return;
         }
-        runner.routeIds = ids.map(id => Number(id));
-        runner.targetId = Number(route.target.drop_id);
+        runner.routeIds = ids.map(id => idKey(id));
+        runner.targetId = idKey(route.target.drop_id);
         runner.targetScore = Number(route.score) || 0;
         runner.routeScore = runner.targetScore;
         runner.routeValue = Number(route.value) || 0;
@@ -1887,6 +1887,14 @@
         return fallback;
       }
 
+      // §5.4 身份键统一为字符串:user_id/drop_id/flowId/targetId/Map·Set 键
+      // 一律用 idKey 归一,禁止 Number(id) 做身份比较(超 JS 安全整数会碰撞)。
+      // 只有坐标、速度、距离、金额、HP、体力、tick 才能转 Number。
+      function idKey(value) {
+        if (value === null || value === undefined) return "";
+        return String(value);
+      }
+
       // 5s 体力必须是有限非负数值才可用于火控预算;未知/缺失/NaN/非数字一律 fail closed。
       // "" 与纯空白串也算未知(Number("")===0 不代表真的 0 体力)。
       function finiteStaminaMs(raw) {
@@ -1904,7 +1912,7 @@
         now = Number.isFinite(Number(now)) ? Number(now) : Date.now();
         const seen = new Set();
         for (const entity of state.entities || []) {
-          if (Number(entity.user_id) === Number(state.currentUserId)) continue;
+          if (idKey(entity.user_id) === idKey(state.currentUserId)) continue;
           if (entity.life !== "Alive") continue;
           const key = enemyKey(entity);
           if (!key) continue;
@@ -1952,9 +1960,9 @@
       }
 
       function knownNameForUser(userId) {
-        const id = Number(userId);
+        const id = idKey(userId);
         if (state.userNames && typeof state.userNames.get === "function") {
-          const name = state.userNames.get(id) || state.userNames.get(String(userId));
+          const name = state.userNames.get(id);
           if (name) return cleanUserName(name, userId);
         }
         return "";
@@ -1981,9 +1989,9 @@
       }
 
       function mergeDropLeaderboardUser(byUser, userId, drop, names, source) {
-        const id = Number(userId);
+        const id = idKey(userId);
         const amount = Number(drop);
-        if (!Number.isFinite(id) || !(amount > 0)) return;
+        if (!id || !(amount > 0)) return;
         const existing = byUser.get(id);
         if (!existing || amount > existing.drop || (!existing.copyName && names.copyName)) {
           byUser.set(id, {
@@ -1999,14 +2007,14 @@
       function topDropUsers() {
         const byUser = new Map();
         for (const entity of state.entities || []) {
-          const userId = Number(entity && entity.user_id);
-          if (!Number.isFinite(userId)) continue;
+          const userId = idKey(entity && entity.user_id);
+          if (!userId) continue;
           if (entity.life && entity.life !== "Alive") continue;
           mergeDropLeaderboardUser(byUser, userId, enemyDrop(entity), leaderboardNameFromEntity(entity, userId), "entity");
         }
         const minimapPoints = state.minimap && Array.isArray(state.minimap.points) ? state.minimap.points : [];
         for (const point of minimapPoints) {
-          const userId = Number(point && (point.u ?? point.user_id));
+          const userId = idKey(point && (point.u ?? point.user_id));
           const drop = Number(point && (point.d ?? point.drop ?? point.death_reward_preview ?? point.death_drop_coins));
           mergeDropLeaderboardUser(byUser, userId, drop, leaderboardNameForUser(userId), "minimap");
         }
@@ -2151,10 +2159,10 @@
             const name = document.createElement("span");
             const hp = document.createElement("span");
             const dist = document.createElement("span");
-            const userId = Number(enemy.user_id);
+            const userId = idKey(enemy.user_id);
             button.type = "button";
-            button.dataset.userId = String(userId);
-            button.classList.toggle("active", runner.attackLockUserId !== null && Number(runner.attackLockUserId) === userId);
+            button.dataset.userId = userId;
+            button.classList.toggle("active", runner.attackLockUserId !== null && idKey(runner.attackLockUserId) === userId);
             button.title = "点击锁定攻击对象";
             name.className = "crgr-attack-name";
             hp.className = "crgr-attack-hp";
@@ -2176,17 +2184,17 @@
         if (!button || !ui.attackList || !ui.attackList.contains(button)) return;
         const me = getMe();
         if (!me) return;
-        const target = visibleAttackTargetById(me, Number(button.dataset.userId));
+        const target = visibleAttackTargetById(me, button.dataset.userId);
         if (!target) return;
         setAttackLock(target, "手动选择");
       }
 
       function huntCandidateFromEntity(entity, me) {
-        const userId = Number(entity && entity.user_id);
+        const userId = idKey(entity && entity.user_id);
         const x = Number(entity && entity.x);
         const y = Number(entity && entity.y);
-        if (!Number.isFinite(userId) || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-        if (Number(userId) === Number(state.currentUserId)) return null;
+        if (!userId || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (userId === idKey(state.currentUserId)) return null;
         if (entity.life && entity.life !== "Alive") return null;
         const name = huntNameFromEntity(entity, userId);
         if (!name) return null;
@@ -2203,11 +2211,11 @@
       }
 
       function huntCandidateFromMinimap(point, me, liveIds) {
-        const userId = Number(point && (point.u ?? point.user_id));
+        const userId = idKey(point && (point.u ?? point.user_id));
         const x = Number(point && point.x);
         const y = Number(point && point.y);
-        if (!Number.isFinite(userId) || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-        if (Number(userId) === Number(state.currentUserId)) return null;
+        if (!userId || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (userId === idKey(state.currentUserId)) return null;
         if (liveIds && liveIds.has(userId)) return null;
         const name = knownNameForUser(userId);
         if (!name) return null;
@@ -2266,7 +2274,7 @@
         if (!candidates.length) return null;
 
         if (runner.huntTargetId !== null) {
-          const current = candidates.find(candidate => Number(candidate.userId) === Number(runner.huntTargetId));
+          const current = candidates.find(candidate => candidate.userId === runner.huntTargetId);
           if (current) return current;
         }
 
@@ -2274,7 +2282,7 @@
           a.matchRank - b.matchRank
           || a.sourcePenalty - b.sourcePenalty
           || a.dist - b.dist
-          || a.userId - b.userId
+          || String(a.userId).localeCompare(String(b.userId))
         )[0];
       }
 
@@ -2287,7 +2295,7 @@
           const scale = rawSpeed <= 250 ? 1000 / tickMs : 1;
           return { vx: rawVx * scale, vy: rawVy * scale };
         }
-        const motion = runner.enemyMotion.get(String(userId ?? (entity && entity.user_id) ?? enemyKey(entity)));
+        const motion = runner.enemyMotion.get(idKey(userId ?? (entity && entity.user_id) ?? enemyKey(entity)));
         if (motion && (Math.abs(motion.vxCmps || 0) > 0.01 || Math.abs(motion.vyCmps || 0) > 0.01)) {
           return { vx: motion.vxCmps || 0, vy: motion.vyCmps || 0 };
         }
@@ -2317,7 +2325,7 @@
       function liveEnemies(me, limitCm) {
         const now = Date.now();
         return (state.entities || [])
-          .filter(entity => Number(entity.user_id) !== Number(state.currentUserId))
+          .filter(entity => idKey(entity.user_id) !== idKey(state.currentUserId))
           .filter(entity => entity.life === "Alive")
           .map(entity => ({
             ...entity,
@@ -2334,7 +2342,7 @@
       }
 
       function enemyDisplayName(enemy) {
-        const userId = Number(enemy && enemy.user_id);
+        const userId = idKey(enemy && enemy.user_id);
         return huntNameFromEntity(enemy, userId) || ("未知用户 #" + userId);
       }
 
@@ -2355,10 +2363,10 @@
       }
 
       function visibleAttackTargetById(me, userId) {
-        const id = Number(userId);
-        if (!Number.isFinite(id)) return null;
+        const id = idKey(userId);
+        if (!id) return null;
         const target = liveEnemies(me, ENEMY_LINE_SCAN_CM)
-          .find(enemy => Number(enemy.user_id) === id);
+          .find(enemy => idKey(enemy.user_id) === id);
         return decorateAttackEnemy(target);
       }
 
@@ -2384,8 +2392,8 @@
 
       function setAttackLock(enemy, reason) {
         const target = decorateAttackEnemy(enemy);
-        const userId = Number(target && target.user_id);
-        if (!Number.isFinite(userId)) return;
+        const userId = idKey(target && target.user_id);
+        if (!userId) return;
         runner.attackLockUserId = userId;
         runner.attackLockName = target.displayName || ("#" + userId);
         runner.attackLockStatus = "LOCK";
@@ -2573,7 +2581,7 @@
           source.items.forEach((raw, index) => {
             if (!raw || typeof raw !== "object") return;
             const owner = projectileOwner(raw);
-            if (Number.isFinite(owner) && Number(owner) === Number(state.currentUserId)) return;
+            if (Number.isFinite(owner) && idKey(owner) === idKey(state.currentUserId)) return;
             const key = projectileKey(raw, source.name, index);
             if (seen.has(key)) return;
             const previous = runner.projectileMotion.get(key);
@@ -2773,7 +2781,7 @@
         return liveEnemies(me, AUTO_FIRE_RANGE_CM)
           .map(decorateAttackEnemy)
           .filter(enemy => Number.isFinite(enemy.hpForFire) && enemy.hpForFire > 0)
-          .sort((a, b) => a.hpForFire - b.hpForFire || a.dist - b.dist || Number(a.user_id) - Number(b.user_id))[0] || null;
+          .sort((a, b) => a.hpForFire - b.hpForFire || a.dist - b.dist || String(a.user_id).localeCompare(String(b.user_id)))[0] || null;
       }
 
       function observedProjectileSpeedCmps() {
@@ -3134,7 +3142,7 @@
         const valueWeight = weight == null ? 0.65 : weight;
         let sum = 0;
         for (const other of candidates || []) {
-          if (Number(other.drop_id) === Number(drop.drop_id)) continue;
+          if (idKey(other.drop_id) === idKey(drop.drop_id)) continue;
           const dist = Math.hypot(Number(other.x) - Number(drop.x), Number(other.y) - Number(drop.y));
           if (dist > scanRadius) continue;
           sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight;
@@ -3161,7 +3169,7 @@
         const safetyFactor = safety < RICH_ENEMY_SCAN_CM
           ? 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM))
           : 1;
-        const sameTargetBias = Number(drop.drop_id) === Number(runner.targetId) ? 1.12 : 1;
+        const sameTargetBias = idKey(drop.drop_id) === runner.targetId ? 1.12 : 1;
         return ((amount + cluster) / (seconds + 1.6)) * safetyFactor * sameTargetBias * routeFirstLegPreferFactor(firstLeg);
       }
 
@@ -3170,7 +3178,7 @@
         let amount = 0;
         let weighted = 0;
         for (const other of candidates) {
-          if (Number(other.drop_id) === Number(drop.drop_id)) continue;
+          if (idKey(other.drop_id) === idKey(drop.drop_id)) continue;
           const dist = Math.hypot(Number(other.x) - Number(drop.x), Number(other.y) - Number(drop.y));
           if (dist > ROUTE_CLUSTER_CM) continue;
           const value = dropAmount(other);
@@ -3182,9 +3190,9 @@
       }
 
       function isCoinBlacklisted(id) {
-        const until = runner.coinBlacklist.get(Number(id));
+        const until = runner.coinBlacklist.get(idKey(id));
         if (until == null) return false;
-        if (until <= Date.now()) { runner.coinBlacklist.delete(Number(id)); return false; }
+        if (until <= Date.now()) { runner.coinBlacklist.delete(idKey(id)); return false; }
         return true;
       }
 
@@ -3274,7 +3282,7 @@
       function buildRouteFromAnchor(anchor, candidates, me, threats) {
         const maxPoints = routeLimitForAnchor(anchor);
         const linkLimit = anchor.routeCluster.count >= 5 ? ROUTE_MAX_LINK_CM : ROUTE_LINK_CM;
-        const remaining = new Map(candidates.map(drop => [Number(drop.drop_id), drop]));
+        const remaining = new Map(candidates.map(drop => [idKey(drop.drop_id), drop]));
         const route = [];
         let currentX = Number(me.x);
         let currentY = Number(me.y);
@@ -3296,7 +3304,7 @@
             if (next.score < currentEfficiency * densityAllowance) break;
           }
           route.push(next.drop);
-          remaining.delete(Number(next.drop.drop_id));
+          remaining.delete(idKey(next.drop.drop_id));
           totalValue += next.drop.amountValue;
           totalSeconds += next.seconds;
           totalLegCm += Number(next.legDist) || 0;
@@ -3308,13 +3316,13 @@
         }
 
         if (!route.length) return null;
-        const ids = route.map(drop => Number(drop.drop_id));
+        const ids = route.map(drop => idKey(drop.drop_id));
         const densityBonus = Math.min(
           totalValue * 0.75,
           route.reduce((sum, drop) => sum + Math.min(drop.amountValue * 2, drop.routeCluster.weighted) * 0.18, 0)
         );
         const countBonus = 1 + Math.min(0.18, (route.length - 1) * 0.045);
-        const sameRouteBias = ids[0] === Number(runner.targetId) ? 1.08 : 1;
+        const sameRouteBias = ids[0] === runner.targetId ? 1.08 : 1;
         const kind = route.length >= 3 ? "cluster" : route.length === 2 ? "pair" : "single";
         // 路线总长软折扣:超过起点阈值的部分按斜率压分,让近处金团路线相对胜出、远离处长路线变贵。
         const lengthExcessCm = Math.max(0, totalLegCm - ROUTE_LENGTH_PENALTY_START_CM);
@@ -3343,7 +3351,7 @@
         const anchors = new Map();
         for (const group of groups) {
           for (const drop of group) {
-            const id = Number(drop.drop_id);
+            const id = idKey(drop.drop_id);
             if (!anchors.has(id)) anchors.set(id, drop);
             if (anchors.size >= limit) return Array.from(anchors.values());
           }
@@ -3372,7 +3380,7 @@
         const byNear = byNearAll.slice(0, 6);
         const byAmount = byAmountAll.slice(0, 6);
         const current = runner.targetId
-          ? candidates.filter(drop => Number(drop.drop_id) === Number(runner.targetId))
+          ? candidates.filter(drop => idKey(drop.drop_id) === runner.targetId)
           : [];
         const routePool = uniqueDrops([
           current,
@@ -3396,8 +3404,8 @@
       function currentCoinRouteTarget(me, threats) {
         const drops = Array.isArray(state.coinDrops) ? state.coinDrops : [];
         while (runner.routeIds && runner.routeIds.length) {
-          const id = Number(runner.routeIds[0]);
-          const target = drops.find(drop => Number(drop.drop_id) === id);
+          const id = runner.routeIds[0];
+          const target = drops.find(drop => idKey(drop.drop_id) === id);
           if (!target) {
             runner.routeIds.shift();
             runner.routeAdvanced = true;
@@ -3419,7 +3427,7 @@
         }
 
         if (runner.targetId) {
-          const target = drops.find(drop => Number(drop.drop_id) === Number(runner.targetId));
+          const target = drops.find(drop => idKey(drop.drop_id) === runner.targetId);
           if (!target || isCoinBlacklisted(target.drop_id)
             || minRichEnemyDistanceAt(Number(target.x), Number(target.y), threats) < RICH_ENEMY_KEEP_CM) {
             clearCoinRoute();
@@ -3454,7 +3462,7 @@
         const awayLen = Math.hypot(awayX, awayY) || 1;
         let best = null;
         for (const drop of drops) {
-          if (excludeId != null && Number(drop.drop_id) === Number(excludeId)) continue;
+          if (excludeId != null && idKey(drop.drop_id) === idKey(excludeId)) continue;
           const dx = Number(drop.x);
           const dy = Number(drop.y);
           if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
@@ -3660,17 +3668,17 @@
       }
 
       function renderWorldPoint(point) {
-        const userId = Number(point && point.user_id);
-        const currentUserId = Number(state.currentUserId);
-        if (Number.isFinite(userId) && Number.isFinite(currentUserId) && userId === currentUserId) {
+        const userId = idKey(point && point.user_id);
+        const currentUserId = idKey(state.currentUserId);
+        if (userId && currentUserId && userId === currentUserId) {
           const visual = state.localVisual;
           if (visual && Number.isFinite(Number(visual.x)) && Number.isFinite(Number(visual.y))) {
             return { ...point, x: Number(visual.x), y: Number(visual.y) };
           }
         }
         const visuals = state.visualEntities;
-        if (Number.isFinite(userId) && visuals && typeof visuals.get === "function") {
-          const visual = visuals.get(userId);
+        if (userId && visuals && typeof visuals.get === "function") {
+          const visual = visuals.get(userId) || visuals.get(Number(userId));
           if (visual && Number.isFinite(Number(visual.x)) && Number.isFinite(Number(visual.y))) {
             return { ...point, x: Number(visual.x), y: Number(visual.y) };
           }
@@ -3873,7 +3881,7 @@
         if (runner.manualTarget) return runner.manualTarget;
         if (runner.navTarget) return runner.navTarget;
         if (runner.targetId) {
-          const target = state.coinDrops.find(drop => Number(drop.drop_id) === Number(runner.targetId));
+          const target = state.coinDrops.find(drop => idKey(drop.drop_id) === runner.targetId);
           if (target) return target;
         }
         return null;
