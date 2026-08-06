@@ -2367,14 +2367,13 @@
 
       function richEnemies(me, limitCm) {
         return liveEnemies(me, limitCm)
-          .filter(entity => entity.dropForAvoid > RICH_ENEMY_MIN_DROP)
+          .filter(entity => isRichEnemy(entity, RICH_ENEMY_MIN_DROP))
           .sort((a, b) => a.dist - b.dist);
       }
 
       function escapeEnemies(me, limitCm) {
         return liveEnemies(me, limitCm)
-          .filter(entity => entity.dropForAvoid > RICH_ENEMY_MIN_DROP
-            || (entity.dropForAvoid <= RICH_ENEMY_MIN_DROP && entity.movedRecently))
+          .filter(entity => isEscapeThreat(entity, RICH_ENEMY_MIN_DROP, entity.movedRecently))
           .sort((a, b) => a.dist - b.dist);
       }
 
@@ -3439,11 +3438,11 @@
         setDanger(urgent);
         clearCoinRoute();
         // §5.9: 只在"进入逃离"或"威胁目标变化"时计入规避事件,避免 150ms tick 反复加。
-        if (!runner.fleeing || (runner.fleeKey && runner.fleeKey !== key)) {
-          runner.avoidances += 1;
-        }
-        runner.fleeing = true;
-        runner.fleeKey = key;
+        // Phase 6:委托给 FleePlanner.fleeEpisode(纯逻辑,可测试)。
+        const ep = fleeEpisode(runner.fleeing, runner.fleeKey, key);
+        runner.avoidances += ep.countIncrement;
+        runner.fleeing = ep.fleeing;
+        runner.fleeKey = ep.fleeKey;
         runner.lastThreat = {
           name: enemy.name || ("User " + enemy.user_id),
           drop: enemy.dropForAvoid,
@@ -3862,21 +3861,8 @@
           const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
           if (!bridge || typeof bridge.writeLeave !== "function") return;
           const noReconnect = !!(options && options.noReconnect);
-          let type = "other";
-          if (noReconnect) {
-            type = "other";
-          } else if (reason === "manual") {
-            type = "manual";
-          } else if (runner.hourlyLimitLeaveTriggered && /1h体力限制/.test(String(reason || ""))) {
-            type = "stamina";
-          } else {
-            const hp = me ? Number(me.hp || 0) : NaN;
-            if (Number.isFinite(hp)) {
-              type = hp <= COMBAT_CRITICAL_HP ? "lowhp" : "damage";
-            } else {
-              type = "damage";
-            }
-          }
+          // Phase 6:类型分类统一委托给 LeavePolicy.classifyLeave(纯逻辑,可测试)。
+          const type = classifyLeave(reason, me ? Number(me.hp || 0) : NaN, noReconnect, COMBAT_CRITICAL_HP);
           const enabled = !noReconnect && runner.autoReconnect !== false;
           const rec = {
             ts: Date.now(),
@@ -3887,7 +3873,7 @@
             v: 2
           };
           bridge.writeLeave(rec);
-          if (enabled && (type === "damage" || type === "lowhp" || type === "stamina")
+          if (shouldAutoReconnect(type, enabled, noReconnect)
             && typeof bridge.markLeaveFlow === "function") {
             if (typeof bridge.clearAck === "function") bridge.clearAck();
             bridge.markLeaveFlow(rec.ts);

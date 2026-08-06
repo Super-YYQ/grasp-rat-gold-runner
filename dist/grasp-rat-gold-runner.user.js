@@ -2023,6 +2023,91 @@
             }
           };
         }
+        function isRichEnemy(enemy, minDrop) {
+          return !!enemy && enemy.dropForAvoid > (minDrop == null ? 10 : minDrop);
+        }
+        function isEscapeThreat(enemy, minDrop, movedRecently) {
+          if (!enemy) return false;
+          const drop = enemy.dropForAvoid;
+          if (drop > (minDrop == null ? 10 : minDrop)) return true;
+          return drop <= (minDrop == null ? 10 : minDrop) && !!(movedRecently != null ? movedRecently : enemy.movedRecently);
+        }
+        function pursuitStatus(enemy, enemyMotion, now) {
+          const key = enemy && enemy.key;
+          const motion = key && enemyMotion ? enemyMotion.get(key) : null;
+          if (!motion) return { pursuing: false, durationMs: 0 };
+          const firstSeenAt = motion.firstSeenAt || motion.lastSeenAt || 0;
+          return {
+            pursuing: now - motion.lastSeenAt <= 1e4,
+            // 最近 10s 内仍见(与 MOVING_ENEMY_MEMORY 一致)
+            durationMs: Math.max(0, now - firstSeenAt)
+          };
+        }
+        function sortByThreat(enemies) {
+          return (enemies || []).filter(Boolean).sort((a, b) => Number(b.dropForAvoid || 0) - Number(a.dropForAvoid || 0) || Number(a.dist) - Number(b.dist));
+        }
+        function nextFleeStage(evade, now, sameEnemy, arrivedAtAnchor, staleAnchor, anchorAvailable, excludeId, holdMs, maxMs) {
+          const hold = holdMs == null ? 1500 : holdMs;
+          const max = maxMs == null ? 3500 : maxMs;
+          if (!sameEnemy || !evade || evade.startedAt == null) {
+            return { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+          }
+          if (evade.x != null) {
+            if (arrivedAtAnchor || staleAnchor) {
+              const anchor = anchorAvailable ? { x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id } : null;
+              if (anchor) {
+                return { stage: FLEE_STAGE_ANCHOR, ...anchor, anchorAt: now };
+              }
+              return { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+            }
+            return { stage: FLEE_STAGE_ANCHOR, x: evade.x, y: evade.y, drop_id: evade.drop_id, anchorAt: evade.anchorAt };
+          }
+          if (now - evade.startedAt >= hold) {
+            if (anchorAvailable) {
+              return { stage: FLEE_STAGE_ANCHOR, x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id, anchorAt: now };
+            }
+          }
+          return { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+        }
+        function fleeEpisode(fleeing, fleeKey, newKey) {
+          const key = String(newKey || "");
+          if (!fleeing || fleeKey && fleeKey !== key) {
+            return { countIncrement: 1, fleeing: true, fleeKey: key };
+          }
+          return { countIncrement: 0, fleeing: true, fleeKey: fleeKey || key };
+        }
+        const FLEE_STAGE_REVERSE = "reverse";
+        const FLEE_STAGE_ANCHOR = "anchor";
+        function classifyLeave(reason, hp, noReconnect, criticalHp) {
+          if (noReconnect) return LEAVE_TYPE.OTHER;
+          if (String(reason || "") === "manual") return LEAVE_TYPE.MANUAL;
+          if (/1h体力限制/.test(String(reason || ""))) return LEAVE_TYPE.STAMINA;
+          const h = Number(hp);
+          if (Number.isFinite(h)) {
+            return h <= (criticalHp == null ? 25 : criticalHp) ? LEAVE_TYPE.LOWHP : LEAVE_TYPE.DAMAGE;
+          }
+          return LEAVE_TYPE.DAMAGE;
+        }
+        function shouldAutoReconnect(type, autoReconnectOn, noReconnect) {
+          if (noReconnect) return false;
+          if (!autoReconnectOn) return false;
+          return type === LEAVE_TYPE.DAMAGE || type === LEAVE_TYPE.LOWHP || type === LEAVE_TYPE.STAMINA;
+        }
+        function shouldLeaveOnHpDrop(prevHp, hp, combatMode, alreadyTriggered) {
+          if (combatMode) return false;
+          if (alreadyTriggered) return false;
+          const prev = Number(prevHp);
+          const cur = Number(hp);
+          if (!Number.isFinite(prev) || !Number.isFinite(cur)) return false;
+          return cur < prev;
+        }
+        const LEAVE_TYPE = {
+          MANUAL: "manual",
+          STAMINA: "stamina",
+          LOWHP: "lowhp",
+          DAMAGE: "damage",
+          OTHER: "other"
+        };
         function contractPresent2(value, expectation) {
           if (typeof value === "undefined" || value === null || value === false) return false;
           if (expectation === "function") return typeof value === "function";
@@ -2942,10 +3027,10 @@
           };
         }
         function richEnemies(me, limitCm) {
-          return liveEnemies(me, limitCm).filter((entity) => entity.dropForAvoid > RICH_ENEMY_MIN_DROP).sort((a, b) => a.dist - b.dist);
+          return liveEnemies(me, limitCm).filter((entity) => isRichEnemy(entity, RICH_ENEMY_MIN_DROP)).sort((a, b) => a.dist - b.dist);
         }
         function escapeEnemies(me, limitCm) {
-          return liveEnemies(me, limitCm).filter((entity) => entity.dropForAvoid > RICH_ENEMY_MIN_DROP || entity.dropForAvoid <= RICH_ENEMY_MIN_DROP && entity.movedRecently).sort((a, b) => a.dist - b.dist);
+          return liveEnemies(me, limitCm).filter((entity) => isEscapeThreat(entity, RICH_ENEMY_MIN_DROP, entity.movedRecently)).sort((a, b) => a.dist - b.dist);
         }
         function combatEnemies(me) {
           return liveEnemies(me, COMBAT_SCAN_CM).map((enemy) => ({
@@ -3883,11 +3968,10 @@
           }
           setDanger(urgent);
           clearCoinRoute();
-          if (!runner.fleeing || runner.fleeKey && runner.fleeKey !== key) {
-            runner.avoidances += 1;
-          }
-          runner.fleeing = true;
-          runner.fleeKey = key;
+          const ep = fleeEpisode(runner.fleeing, runner.fleeKey, key);
+          runner.avoidances += ep.countIncrement;
+          runner.fleeing = ep.fleeing;
+          runner.fleeKey = ep.fleeKey;
           runner.lastThreat = {
             name: enemy.name || "User " + enemy.user_id,
             drop: enemy.dropForAvoid,
@@ -4263,21 +4347,7 @@
             const bridge = typeof window !== "undefined" && window.__crgrReconnect || null;
             if (!bridge || typeof bridge.writeLeave !== "function") return;
             const noReconnect = !!(options && options.noReconnect);
-            let type = "other";
-            if (noReconnect) {
-              type = "other";
-            } else if (reason === "manual") {
-              type = "manual";
-            } else if (runner.hourlyLimitLeaveTriggered && /1h体力限制/.test(String(reason || ""))) {
-              type = "stamina";
-            } else {
-              const hp = me ? Number(me.hp || 0) : NaN;
-              if (Number.isFinite(hp)) {
-                type = hp <= COMBAT_CRITICAL_HP ? "lowhp" : "damage";
-              } else {
-                type = "damage";
-              }
-            }
+            const type = classifyLeave(reason, me ? Number(me.hp || 0) : NaN, noReconnect, COMBAT_CRITICAL_HP);
             const enabled = !noReconnect && runner.autoReconnect !== false;
             const rec = {
               ts: Date.now(),
@@ -4288,7 +4358,7 @@
               v: 2
             };
             bridge.writeLeave(rec);
-            if (enabled && (type === "damage" || type === "lowhp" || type === "stamina") && typeof bridge.markLeaveFlow === "function") {
+            if (shouldAutoReconnect(type, enabled, noReconnect) && typeof bridge.markLeaveFlow === "function") {
               if (typeof bridge.clearAck === "function") bridge.clearAck();
               bridge.markLeaveFlow(rec.ts);
             } else {
