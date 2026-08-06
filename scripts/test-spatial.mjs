@@ -1,7 +1,7 @@
 // §5.1 SpatialGrid 正确性(与暴力对照)+ 性能预算。
 // Run: node scripts/test-spatial.mjs
 import assert from "node:assert/strict";
-import { SpatialGrid, randomEntities } from "./spatial-grid.mjs";
+import { SpatialGrid, randomEntities } from "../src/strategy/navigation/spatial-grid.js";
 
 // ---- 正确性:queryRadius / nearestWithin 与暴力扫描一致 ----
 {
