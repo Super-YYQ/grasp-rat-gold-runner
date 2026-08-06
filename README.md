@@ -17,9 +17,11 @@
 
 搭配 Tampermonkey（篡改猴）使用：`https://www.tampermonkey.net/`
 
-PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner.user.js)。
+PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-gold-runner.user.js)。
 
-手机端脚本位于[dist/grasp-rat-gold-runner-mobile.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/main/dist/grasp-rat-gold-runner-mobile.user.js)。
+手机端脚本位于[dist/grasp-rat-gold-runner-mobile.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-gold-runner-mobile.user.js)。
+
+> 注意：当前稳定版本发布在 `optimize` 分支（PC `1.9.13` / Mobile `0.1.7`）。`main` 上的脚本已过期，请勿从 `main` 安装。重构完成并正式合入 `main` 后，本链接会改回 `main`。
 
 ------
 
