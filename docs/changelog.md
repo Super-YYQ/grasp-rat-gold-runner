@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.13
+
+- **H1 安装入口修正**：README 安装地址从 `main`（已过期 1.7.3）改指 `optimize`（当前稳定 1.9.13 / mobile 0.1.7），并加注说明；重构完成合入 `main` 后再改回。
+- **H2 自动攻击体力 fail closed**：`stamina_5s_remaining_milli` 为 `undefined`/`null`/`NaN`/非数字字符串时，`startAutoFireBurst` 立即返回“体力未知·不发射”，不再回退到随机 5-8 发；空字符串也被视为未知（`Number("")===0` 不算有效体力）。PC/mobile 同步。
+- **H3 身份键统一字符串**：新增 `idKey(value)`（`null`/`undefined`→`""`，其余 `String(value)`）。`user_id`、`drop_id`、`routeIds`、`targetId`、`huntTargetId`、`attackLockUserId`、金币黑名单 Map/Set、排行榜 `byUser`、`liveIds`、`bestMinimapById` 等身份键全部改用 `idKey`，不再用 `Number(id)` 做身份比较（超 `Number.MAX_SAFE_INTEGER` 的 ID 会碰撞）。坐标、HP、金额、距离、体力、tick、时间戳仍为数值。PC/mobile 同步。
+- 新增 `scripts/test-ids-stamina.mjs`：覆盖超安全整数 ID 的 Map/Set 不碰撞、`idKey` 归一、`finiteStaminaMs` 对未知体力 fail closed；纳入 `npm run test` 与 `release:check`。
+- PC src/dist 与 package.json 同步到 1.9.13；mobile 到 0.1.7。
+
 ## 1.9.12
 
 - 新增 §11.2 属性测试（`scripts/test-nav-property.mjs`）：确定性随机场景覆盖 0-2000 金币（含重复/超大 ID、非法坐标、缺失/非法金额）、0-100 敌人，断言不返回 NaN、不选非法金币、逃离锚点不落在敌人安全半径内、到达模拟不振荡、同一输入结果确定一致。
