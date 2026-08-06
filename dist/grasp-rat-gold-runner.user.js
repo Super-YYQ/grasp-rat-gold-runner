@@ -14,6 +14,7 @@
 // ==/UserScript==
 
 (() => {
+  // artifacts/prepared-desktop.user.js
   (function() {
     "use strict";
     const RECONNECT_COOLDOWN_LOWHP_MS = 30 * 60 * 1e3;
@@ -1709,6 +1710,66 @@
           danger.classList.toggle("critical", !!active && level === "critical");
           root.classList.toggle("danger", !!active);
         }
+        function idKey(value) {
+          if (value === null || value === void 0) return "";
+          return String(value);
+        }
+        function numberFrom(obj, keys, fallback) {
+          for (const key of keys) {
+            const value = Number(obj && obj[key]);
+            if (Number.isFinite(value)) return value;
+          }
+          return fallback;
+        }
+        function finiteStaminaMs(raw) {
+          if (raw === null || raw === void 0) return null;
+          if (typeof raw === "string" && raw.trim() === "") return null;
+          const value = Number(raw);
+          return Number.isFinite(value) && value >= 0 ? value : null;
+        }
+        function dropAmount(drop) {
+          return Math.max(1, Number(drop && drop.amount || 1));
+        }
+        function readDropAmount(drop) {
+          const value = Number(drop && drop.amount);
+          return Number.isFinite(value) && value > 0 ? value : null;
+        }
+        function minDistanceToEntities(x, y, entities) {
+          let min = Infinity;
+          for (const entity of entities || []) {
+            const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
+            if (d < min) min = d;
+          }
+          return min;
+        }
+        function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+          const vx = bx - ax;
+          const vy = by - ay;
+          if (!Number.isFinite(vx) || !Number.isFinite(vy)) return Infinity;
+          const len2 = vx * vx + vy * vy;
+          if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
+          const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+          return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+        }
+        function minSegmentThreatDistance(ax, ay, bx, by, threats) {
+          let min = Infinity;
+          for (const t of threats || []) {
+            const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
+            if (d < min) min = d;
+          }
+          return min;
+        }
+        function travelTicks(fromX, fromY, toX, toY) {
+          const ax = Math.abs(Number(toX) - Number(fromX));
+          const ay = Math.abs(Number(toY) - Number(fromY));
+          if (!Number.isFinite(ax) || !Number.isFinite(ay)) return Infinity;
+          const diagonal = Math.min(ax, ay);
+          const axis = Math.max(ax, ay) - diagonal;
+          return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
+        }
+        function travelSeconds(fromX, fromY, toX, toY) {
+          return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
+        }
         function steerVector(rx, ry) {
           const ax = Math.abs(rx);
           const ay = Math.abs(ry);
@@ -1721,6 +1782,34 @@
           }
           return { dx: Math.sign(rx), dy: Math.sign(ry), mode: "diagonal" };
         }
+        function formatClock(ms) {
+          const date = new Date(Number.isFinite(Number(ms)) ? Number(ms) : Date.now());
+          const pad = (value) => String(value).padStart(2, "0");
+          return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+        }
+        function routeFirstLegPreferFactor(firstLegCm) {
+          const dist = Number(firstLegCm) || 0;
+          if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
+          if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
+          const t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
+          return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
+        }
+        function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
+          const safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
+          if (safety < RICH_ENEMY_KEEP_CM) return 0;
+          if (safety >= RICH_ENEMY_SCAN_CM) return 1;
+          return 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
+        }
+        function routeTurnFactor(prevDx, prevDy, nextDx, nextDy) {
+          const prevLen = Math.hypot(prevDx, prevDy);
+          const nextLen = Math.hypot(nextDx, nextDy);
+          if (prevLen < 1 || nextLen < 1) return 1;
+          const cos = (prevDx * nextDx + prevDy * nextDy) / (prevLen * nextLen);
+          if (cos < -0.45) return 0.58;
+          if (cos < -0.12) return 0.76;
+          if (cos > 0.72) return 1.08;
+          return 1;
+        }
         function moveToward(rx, ry, options) {
           const move = steerVector(rx, ry);
           setVelocity(move.dx, move.dy, options);
@@ -1730,23 +1819,6 @@
         function enemyDrop(enemy) {
           const value = Number(enemy.death_reward_preview ?? enemy.death_drop_coins ?? 0);
           return Number.isFinite(value) ? value : 0;
-        }
-        function numberFrom(obj, keys, fallback) {
-          for (const key of keys) {
-            const value = Number(obj && obj[key]);
-            if (Number.isFinite(value)) return value;
-          }
-          return fallback;
-        }
-        function idKey(value) {
-          if (value === null || value === void 0) return "";
-          return String(value);
-        }
-        function finiteStaminaMs(raw) {
-          if (raw === null || raw === void 0) return null;
-          if (typeof raw === "string" && raw.trim() === "") return null;
-          const value = Number(raw);
-          return Number.isFinite(value) && value >= 0 ? value : null;
         }
         function enemyKey(enemy) {
           return String(enemy.user_id ?? enemy.id ?? enemy.name ?? "");
@@ -1852,11 +1924,6 @@
             mergeDropLeaderboardUser(byUser, userId, drop, leaderboardNameForUser(userId), "minimap");
           }
           return Array.from(byUser.values()).sort((a, b) => b.drop - a.drop || String(a.name).localeCompare(String(b.name))).slice(0, 5);
-        }
-        function formatClock(ms) {
-          const date = new Date(Number.isFinite(Number(ms)) ? Number(ms) : Date.now());
-          const pad = (value) => String(value).padStart(2, "0");
-          return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
         }
         function copyText(text) {
           const value = String(text || "");
@@ -2787,51 +2854,8 @@
           }
           return startAutoFireBurst(me, target, targetName);
         }
-        function minDistanceToEntities(x, y, entities) {
-          let min = Infinity;
-          for (const entity of entities || []) {
-            const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
-            if (d < min) min = d;
-          }
-          return min;
-        }
-        function pointToSegmentDistance(px, py, ax, ay, bx, by) {
-          const vx = bx - ax;
-          const vy = by - ay;
-          if (!Number.isFinite(vx) || !Number.isFinite(vy)) return Infinity;
-          const len2 = vx * vx + vy * vy;
-          if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
-          const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
-          return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-        }
-        function minSegmentThreatDistance(ax, ay, bx, by, threats) {
-          let min = Infinity;
-          for (const t of threats || []) {
-            const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
-            if (d < min) min = d;
-          }
-          return min;
-        }
         function minRichEnemyDistanceAt(x, y, enemies) {
           return minDistanceToEntities(x, y, enemies);
-        }
-        function travelTicks(fromX, fromY, toX, toY) {
-          const ax = Math.abs(Number(toX) - Number(fromX));
-          const ay = Math.abs(Number(toY) - Number(fromY));
-          if (!Number.isFinite(ax) || !Number.isFinite(ay)) return Infinity;
-          const diagonal = Math.min(ax, ay);
-          const axis = Math.max(ax, ay) - diagonal;
-          return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
-        }
-        function dropAmount(drop) {
-          return Math.max(1, Number(drop && drop.amount || 1));
-        }
-        function readDropAmount(drop) {
-          const value = Number(drop && drop.amount);
-          return Number.isFinite(value) && value > 0 ? value : null;
-        }
-        function travelSeconds(fromX, fromY, toX, toY) {
-          return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
         }
         function dropClusterValue(drop, candidates, radius, weight) {
           const scanRadius = radius || DROP_CLUSTER_CM;
@@ -2844,13 +2868,6 @@
             sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight;
           }
           return sum;
-        }
-        function routeFirstLegPreferFactor(firstLegCm) {
-          const dist = Number(firstLegCm) || 0;
-          if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
-          if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
-          const t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
-          return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
         }
         function scoreDrop(drop, me, threats, candidates) {
           const amount = dropAmount(drop);
@@ -2912,22 +2929,6 @@
           if (count >= 7) return ROUTE_MAX_POINTS_DENSE;
           if (count >= 3) return ROUTE_MAX_POINTS_MID;
           if (count >= 1) return ROUTE_MAX_POINTS_SPARSE;
-          return 1;
-        }
-        function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
-          const safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
-          if (safety < RICH_ENEMY_KEEP_CM) return 0;
-          if (safety >= RICH_ENEMY_SCAN_CM) return 1;
-          return 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
-        }
-        function routeTurnFactor(prevDx, prevDy, nextDx, nextDy) {
-          const prevLen = Math.hypot(prevDx, prevDy);
-          const nextLen = Math.hypot(nextDx, nextDy);
-          if (prevLen < 1 || nextLen < 1) return 1;
-          const cos = (prevDx * nextDx + prevDy * nextDy) / (prevLen * nextLen);
-          if (cos < -0.45) return 0.58;
-          if (cos < -0.12) return 0.76;
-          if (cos > 0.72) return 1.08;
           return 1;
         }
         function routeStepScore(drop, currentX, currentY, prevDx, prevDy, remaining, threats, linkLimit) {

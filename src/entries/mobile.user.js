@@ -917,19 +917,9 @@
         danger.classList.toggle("critical", !!active && level === "critical");
         root.classList.toggle("danger", !!active);
       }
-
-      function steerVector(rx, ry) {
-        const ax = Math.abs(rx);
-        const ay = Math.abs(ry);
-        if (ax < 35 && ay < 35) return { dx: 0, dy: 0, mode: "stop" };
-        if (ay < 35 || ax / Math.max(1, ay) >= AXIS_DOMINANCE_RATIO) {
-          return { dx: Math.sign(rx), dy: 0, mode: "x-axis" };
-        }
-        if (ax < 35 || ay / Math.max(1, ax) >= AXIS_DOMINANCE_RATIO) {
-          return { dx: 0, dy: Math.sign(ry), mode: "y-axis" };
-        }
-        return { dx: Math.sign(rx), dy: Math.sign(ry), mode: "diagonal" };
-      }
+    // __SHARED_INLINE__
+    // (build.mjs 在此内联 src/shared + src/strategy 的纯函数,单一真相源)
+    // __SHARED_INLINE_END__
 
       function moveToward(rx, ry, options) {
         const move = steerVector(rx, ry);
@@ -941,31 +931,6 @@
       function enemyDrop(enemy) {
         const value = Number(enemy.death_reward_preview ?? enemy.death_drop_coins ?? 0);
         return Number.isFinite(value) ? value : 0;
-      }
-
-      function numberFrom(obj, keys, fallback) {
-        for (const key of keys) {
-          const value = Number(obj && obj[key]);
-          if (Number.isFinite(value)) return value;
-        }
-        return fallback;
-      }
-
-      // §5.4 身份键统一为字符串:user_id/drop_id/flowId/targetId/Map·Set 键
-      // 一律用 idKey 归一,禁止 Number(id) 做身份比较(超 JS 安全整数会碰撞)。
-      // 只有坐标、速度、距离、金额、HP、体力、tick 才能转 Number。
-      function idKey(value) {
-        if (value === null || value === undefined) return "";
-        return String(value);
-      }
-
-      // 5s 体力必须是有限非负数值才可用于火控预算;未知/缺失/NaN/非数字一律 fail closed。
-      // "" 与纯空白串也算未知(Number("")===0 不代表真的 0 体力)。
-      function finiteStaminaMs(raw) {
-        if (raw === null || raw === undefined) return null;
-        if (typeof raw === "string" && raw.trim() === "") return null;
-        const value = Number(raw);
-        return Number.isFinite(value) && value >= 0 ? value : null;
       }
 
       function enemyKey(enemy) {
@@ -1085,12 +1050,6 @@
         return Array.from(byUser.values())
           .sort((a, b) => b.drop - a.drop || String(a.name).localeCompare(String(b.name)))
           .slice(0, 5);
-      }
-
-      function formatClock(ms) {
-        const date = new Date(Number.isFinite(Number(ms)) ? Number(ms) : Date.now());
-        const pad = value => String(value).padStart(2, "0");
-        return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
       }
 
       function copyText(text) {
@@ -2140,61 +2099,8 @@
         return startAutoFireBurst(me, target, targetName);
       }
 
-      function minDistanceToEntities(x, y, entities) {
-        let min = Infinity;
-        for (const entity of entities || []) {
-          const d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
-          if (d < min) min = d;
-        }
-        return min;
-      }
-
-      function pointToSegmentDistance(px, py, ax, ay, bx, by) {
-        const vx = bx - ax;
-        const vy = by - ay;
-        // §11.2:非法坐标按"不可达"(Infinity)处理,绝不返回 NaN。
-        if (!Number.isFinite(vx) || !Number.isFinite(vy)) return Infinity;
-        const len2 = vx * vx + vy * vy;
-        if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
-        const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
-        return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-      }
-
-      function minSegmentThreatDistance(ax, ay, bx, by, threats) {
-        let min = Infinity;
-        for (const t of threats || []) {
-          const d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
-          if (d < min) min = d;
-        }
-        return min;
-      }
-
       function minRichEnemyDistanceAt(x, y, enemies) {
         return minDistanceToEntities(x, y, enemies);
-      }
-
-      function travelTicks(fromX, fromY, toX, toY) {
-        const ax = Math.abs(Number(toX) - Number(fromX));
-        const ay = Math.abs(Number(toY) - Number(fromY));
-        // §11.2:非法/缺失坐标按"不可达"处理,绝不返回 NaN。
-        if (!Number.isFinite(ax) || !Number.isFinite(ay)) return Infinity;
-        const diagonal = Math.min(ax, ay);
-        const axis = Math.max(ax, ay) - diagonal;
-        return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
-      }
-
-      function dropAmount(drop) {
-        return Math.max(1, Number(drop && drop.amount || 1));
-      }
-
-      // §5.6:金额缺失/非法返回 null,不作为 1 去追无效目标(由候选过滤)。
-      function readDropAmount(drop) {
-        const value = Number(drop && drop.amount);
-        return Number.isFinite(value) && value > 0 ? value : null;
-      }
-
-      function travelSeconds(fromX, fromY, toX, toY) {
-        return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
       }
 
       function dropClusterValue(drop, candidates, radius, weight) {
@@ -2208,14 +2114,6 @@
           sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight;
         }
         return sum;
-      }
-
-      function routeFirstLegPreferFactor(firstLegCm) {
-        const dist = Number(firstLegCm) || 0;
-        if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
-        if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
-        const t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
-        return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
       }
 
       function scoreDrop(drop, me, threats, candidates) {
@@ -2289,24 +2187,6 @@
         if (count >= 7) return ROUTE_MAX_POINTS_DENSE;
         if (count >= 3) return ROUTE_MAX_POINTS_MID;
         if (count >= 1) return ROUTE_MAX_POINTS_SPARSE;
-        return 1;
-      }
-
-      function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
-        const safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
-        if (safety < RICH_ENEMY_KEEP_CM) return 0;
-        if (safety >= RICH_ENEMY_SCAN_CM) return 1;
-        return 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
-      }
-
-      function routeTurnFactor(prevDx, prevDy, nextDx, nextDy) {
-        const prevLen = Math.hypot(prevDx, prevDy);
-        const nextLen = Math.hypot(nextDx, nextDy);
-        if (prevLen < 1 || nextLen < 1) return 1;
-        const cos = (prevDx * nextDx + prevDy * nextDy) / (prevLen * nextLen);
-        if (cos < -0.45) return 0.58;
-        if (cos < -0.12) return 0.76;
-        if (cos > 0.72) return 1.08;
         return 1;
       }
 

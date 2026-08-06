@@ -19,9 +19,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+// idKey/finiteStaminaMs 已被抽到 src/shared 并在 build 时内联进 dist。
+// 本测试读取构建产物 dist(确保 `npm run build` 已执行;release:check 会先 build)。
 const sources = {
-  pc: fs.readFileSync(path.join(root, "src", "entries", "desktop.user.js"), "utf8"),
-  mobile: fs.readFileSync(path.join(root, "src", "entries", "mobile.user.js"), "utf8")
+  pc: fs.readFileSync(path.join(root, "dist", "grasp-rat-gold-runner.user.js"), "utf8"),
+  mobile: fs.readFileSync(path.join(root, "dist", "grasp-rat-gold-runner-mobile.user.js"), "utf8")
 };
 
 let failed = 0;

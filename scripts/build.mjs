@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopMeta, mobileMeta, renderMetadata } from "./userscript-meta.mjs";
+import { sharedInlineText, spliceSharedInline } from "./inline-shared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -31,9 +32,22 @@ function stripEntryComments(code) {
   return code.replace(/^[ \t]*\/\/ src\/entries\/[^\n]*\n/mg, "");
 }
 
+// 读取 entry,把 __SHARED_INLINE__ 标记替换为共享函数内联文本,写出到临时文件。
+// 这样 pageMain.toString() 注入时能捕获这些函数(单一真相源)。
+function prepareEntry(entry) {
+  const srcPath = path.join(root, entry);
+  const raw = fs.readFileSync(srcPath, "utf8");
+  const inlined = spliceSharedInline(raw, sharedInlineText());
+  const tmp = path.join(artifactsDir, "prepared-" + path.basename(entry));
+  fs.mkdirSync(artifactsDir, { recursive: true });
+  fs.writeFileSync(tmp, inlined, "utf8");
+  return tmp;
+}
+
 async function buildOne({ entry, out, meta, sourcemap }) {
+  const preparedEntry = prepareEntry(entry);
   const result = await build({
-    entryPoints: [path.join(root, entry)],
+    entryPoints: [preparedEntry],
     outfile: path.join(root, out),
     bundle: true,
     format: "iife",
@@ -54,7 +68,7 @@ async function buildOne({ entry, out, meta, sourcemap }) {
     // 开发用 sourcemap 只放 artifacts/,不含于发布产物。
     fs.mkdirSync(artifactsDir, { recursive: true });
     await build({
-      entryPoints: [path.join(root, entry)],
+      entryPoints: [preparedEntry],
       outfile: path.join(artifactsDir, path.basename(out) + ".dev.js"),
       bundle: true,
       format: "iife",
