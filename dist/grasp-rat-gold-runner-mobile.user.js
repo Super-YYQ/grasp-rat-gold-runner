@@ -962,6 +962,15 @@
         return fallback;
       }
 
+      // 5s 体力必须是有限非负数值才可用于火控预算;未知/缺失/NaN/非数字一律 fail closed。
+      // "" 与纯空白串也算未知(Number("")===0 不代表真的 0 体力)。
+      function finiteStaminaMs(raw) {
+        if (raw === null || raw === undefined) return null;
+        if (typeof raw === "string" && raw.trim() === "") return null;
+        const value = Number(raw);
+        return Number.isFinite(value) && value >= 0 ? value : null;
+      }
+
       function enemyKey(enemy) {
         return String(enemy.user_id ?? enemy.id ?? enemy.name ?? "");
       }
@@ -2029,20 +2038,21 @@
       }
 
       function startAutoFireBurst(me, target, targetName) {
-        const stamina = Number(me && me.stamina_5s_remaining_milli);
-        // §6.1:为整组连发预留体能预算,并保留余量用于退出/躲避。
-        let shots = randomInt(AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS);
-        if (Number.isFinite(stamina)) {
-          const affordable = Math.max(0, Math.floor(stamina / AUTO_FIRE_STAMINA_COST_MILLI) - AUTO_FIRE_RESERVE_SHOTS);
-          if (affordable < AUTO_FIRE_BURST_MIN_SHOTS) {
-            runner.autoFireStatus = "体力不足(整组预算)";
-            return false;
-          }
-          shots = Math.min(shots, affordable);
-        } else if (stamina < AUTO_FIRE_STAMINA_COST_MILLI) {
-          runner.autoFireStatus = "体力不足";
+        // §6.1/§6.2:5s 体力未知(NaN/缺失/null/非数字字符串)一律 fail closed,
+        // 绝不回退到"随机 5-8 发"打空体力。只有有限非负数值才参与连发预算。
+        const stamina = finiteStaminaMs(me && me.stamina_5s_remaining_milli);
+        if (stamina == null) {
+          runner.autoFireStatus = "体力未知·不发射";
           return false;
         }
+        // §6.1:为整组连发预留体能预算,并保留余量用于退出/躲避。
+        let shots = randomInt(AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS);
+        const affordable = Math.max(0, Math.floor(stamina / AUTO_FIRE_STAMINA_COST_MILLI) - AUTO_FIRE_RESERVE_SHOTS);
+        if (affordable < AUTO_FIRE_BURST_MIN_SHOTS) {
+          runner.autoFireStatus = "体力不足(整组预算)";
+          return false;
+        }
+        shots = Math.min(shots, affordable);
         const offsets = autoFireCoverageOffsets(me, target, shots);
         const firstClient = autoFireBurstClient(me, target, offsets[0], 0);
         if (!firstClient) {
