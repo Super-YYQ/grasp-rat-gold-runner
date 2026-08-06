@@ -1009,6 +1009,19 @@
             "setPointerFromClient": d && d.setPointerFromClient || game.setPointerFromClient
           };
         }
+        const GAME_CONTRACT_REQUIRED = [
+          ["state", "object"],
+          ["state.entities", "array"],
+          ["state.coinDrops", "array"],
+          ["state.keys", "Set-like"],
+          ["state.currentUserId", "present"],
+          ["sendVelocity", "function"]
+        ];
+        const GAME_CONTRACT_OPTIONAL_CRITICAL = [
+          ["canvas", "HTMLElement"],
+          ["setPointerFromClient", "function"],
+          ["screenCenter", "function"]
+        ];
         function normalizePlayer(raw) {
           if (!raw || typeof raw !== "object") return null;
           const x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null);
@@ -1237,6 +1250,190 @@
             return fallbackWorldToClient(me, deps.overlayRect || rootRect, deps.viewRadiusCm, deps.localVisual);
           }
           return fallbackWorldToClient(me, rect, deps.viewRadiusCm, deps.localVisual);
+        }
+        function makeCandidate(type, source, priority, reason, extra) {
+          return Object.assign({
+            type,
+            source,
+            priority,
+            reason,
+            vector: null,
+            // { x, y } 仅在 MOVE 时有效
+            target: null,
+            // { x, y } 世界坐标(导航/逃离用)
+            expiresAt: null
+            // 该动作的过期时刻(可选)
+          }, extra || {});
+        }
+        function candidateNeedsMove(c) {
+          return c && c.type === "MOVE" && c.vector && (c.vector.x !== 0 || c.vector.y !== 0);
+        }
+        const ACTION_PRIORITY = {
+          DEAD: 1e3,
+          // 已死亡/页面离开/实例销毁
+          HP_LEAVE: 950,
+          // 血量下降/低血/小时体力限制
+          REJOIN_SAFETY_LEAVE: 900,
+          // 重连恢复态附近危险或再次掉血
+          USER_MANUAL_INPUT: 850,
+          // 真实 WASD/方向键接管
+          PROJECTILE_DODGE: 800,
+          // 近弹或高压弹道规避
+          THREAT_FLEE: 750,
+          // 危险玩家过近
+          COMBAT_SPACING: 650,
+          // 临时交战距离调节
+          MANUAL_TARGET: 600,
+          // 用户右键/长按目标
+          HUNT_TARGET: 550,
+          // 自动追杀目标
+          COIN_ROUTE: 400,
+          // 金币路线
+          IDLE: 0
+          // 停止移动
+        };
+        function pickAction(candidates) {
+          if (!candidates || !candidates.length) {
+            return { type: "STOP", source: "idle", priority: 0, reason: "无动作候选", vector: null, target: null };
+          }
+          let best = candidates[0];
+          for (let i = 1; i < candidates.length; i++) {
+            const c = candidates[i];
+            if (c.priority > best.priority) best = c;
+          }
+          if (best.type === "MOVE" && !best.vector) {
+            best = { ...best, vector: { x: 0, y: 0 } };
+          }
+          return best;
+        }
+        function withUserInput(candidates, userKeys) {
+          const hasUserMove = Array.isArray(userKeys) && userKeys.length > 0;
+          if (!hasUserMove) return candidates;
+          const rest = (candidates || []).filter((c) => c.source !== "user");
+          rest.push({
+            type: "MOVE",
+            source: "user",
+            priority: 850,
+            reason: "用户手动输入接管",
+            vector: null,
+            // 由 ControlAdapter 保留用户按键,不清空
+            target: null
+          });
+          return rest;
+        }
+        function createStateMachine(initial) {
+          let state2 = initial || RUNNER_STATES.STANDBY;
+          const listeners = [];
+          return {
+            get() {
+              return state2;
+            },
+            is(...names) {
+              return names.includes(state2);
+            },
+            can(target) {
+              const allowed = ALLOWED_TRANSITIONS[state2] || /* @__PURE__ */ new Set();
+              return allowed.has(target);
+            },
+            transition(target, reason) {
+              if (target === state2) return true;
+              if (!this.can(target)) return false;
+              const prev = state2;
+              state2 = target;
+              for (const fn of listeners) {
+                try {
+                  fn(prev, state2, reason);
+                } catch (_) {
+                }
+              }
+              return true;
+            },
+            onTransition(fn) {
+              listeners.push(fn);
+              return () => {
+                const i = listeners.indexOf(fn);
+                if (i >= 0) listeners.splice(i, 1);
+              };
+            }
+          };
+        }
+        const RUNNER_STATES = {
+          STANDBY: "STANDBY",
+          CRUISE: "CRUISE",
+          HUNT: "HUNT",
+          COMBAT: "COMBAT",
+          REJOIN: "REJOIN",
+          LEAVING: "LEAVING",
+          STOPPED: "STOPPED"
+        };
+        const ALLOWED_TRANSITIONS = {
+          STANDBY: /* @__PURE__ */ new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED"]),
+          CRUISE: /* @__PURE__ */ new Set(["HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+          HUNT: /* @__PURE__ */ new Set(["CRUISE", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+          COMBAT: /* @__PURE__ */ new Set(["CRUISE", "HUNT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+          REJOIN: /* @__PURE__ */ new Set(["CRUISE", "COMBAT", "LEAVING", "STOPPED", "STANDBY"]),
+          LEAVING: /* @__PURE__ */ new Set(["STOPPED", "STANDBY"]),
+          STOPPED: /* @__PURE__ */ new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "STANDBY"])
+        };
+        function createScheduler(inject) {
+          const setInt = inject && inject.setInterval || ((fn, ms) => setInterval(fn, ms));
+          const clearInt = inject && inject.clearInterval || ((id) => clearInterval(id));
+          const now = inject && inject.now || (() => Date.now());
+          const tasks = /* @__PURE__ */ new Map();
+          let timer = 0;
+          let driverMs = 50;
+          let lastTick = 0;
+          let running = false;
+          function tick() {
+            const t = now();
+            lastTick = t;
+            for (const [name, task] of tasks) {
+              const due = task.lastRunAt === 0 || t - task.lastRunAt >= task.periodMs;
+              if (due) {
+                task.lastRunAt = t;
+                try {
+                  task.fn(t);
+                } catch (_) {
+                }
+              }
+            }
+          }
+          return {
+            // 注册/更新一个周期任务。periodMs 为最小周期(实际按 driver 粒度触发)。
+            register(name, periodMs, fn) {
+              const p = Math.max(1, Number(periodMs) || 0);
+              tasks.set(name, { periodMs: p, lastRunAt: 0, fn });
+              if (p < driverMs) driverMs = p;
+              if (running && tasks.size === 1) {
+                clearInt(timer);
+                timer = setInt(tick, driverMs);
+              }
+            },
+            unregister(name) {
+              tasks.delete(name);
+            },
+            start() {
+              if (running) return;
+              running = true;
+              lastTick = now();
+              let minPeriod = driverMs;
+              for (const t of tasks.values()) minPeriod = Math.min(minPeriod, t.periodMs);
+              driverMs = minPeriod;
+              timer = setInt(tick, driverMs);
+            },
+            stop() {
+              if (!running) return;
+              running = false;
+              clearInt(timer);
+              timer = 0;
+            },
+            has(name) {
+              return tasks.has(name);
+            },
+            count() {
+              return tasks.size;
+            }
+          };
         }
         function moveToward(rx, ry, options) {
           const move = steerVector(rx, ry);

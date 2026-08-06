@@ -1425,6 +1425,9 @@
 
       const runner = {
         running: false,
+        // Phase 4:显式状态机(源码 src/core/state-machine.js,内联)。
+        // 与 running/combatMode/huntMode/rejoinRecovery/leaveInProgress 保持同步。
+        stateMachine: createStateMachine(RUNNER_STATES.STANDBY),
         timer: 0,
         statusTimer: 0,
         sidebarSafetyTimer: 0,
@@ -1763,6 +1766,7 @@
           if (runner.navTarget && runner.navTarget.type === "hunt") runner.navTarget = null;
           push("自动追杀已关闭" + (reason ? "：" + reason : ""));
         }
+        syncStateMachine();
         renderLines();
         renderStatus();
       }
@@ -3924,6 +3928,7 @@
           runner.rejoinSafeSince = 0;
           runner.rejoinPeakHp = null;
         }
+        syncStateMachine();
         const me = getMe();
         runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
         if (!button) {
@@ -4005,6 +4010,7 @@
           runner.rejoinLeaveType = leave.type || "damage";
           runner.rejoinSafeSince = 0;
           runner.rejoinPeakHp = null;
+          syncStateMachine();
           push("检测到自动重连回游戏,进入安全恢复态(type=" + runner.rejoinLeaveType + ")…");
           // 不自动恢复运行:停留 !running,由 monitorRejoinRecovery 看护
         } catch (_) {}
@@ -4130,6 +4136,7 @@
           setDanger(false);
           push("临时交战已关闭，恢复金币巡航" + (reason ? "：" + reason : ""));
         }
+        syncStateMachine();
         renderLines();
         renderStatus();
       }
@@ -4445,6 +4452,18 @@
         }
       }
 
+      // Phase 4:把 runner 的隐式模式同步到显式状态机(不改变现有控制流)。
+      // 优先级:LEAVING > REJOIN > COMBAT > HUNT > CRUISE > STOPPED > STANDBY。
+      function syncStateMachine() {
+        const sm = runner.stateMachine;
+        if (runner.leaveInProgress) { sm.transition(RUNNER_STATES.LEAVING, "leave"); return; }
+        if (runner.rejoinRecovery) { sm.transition(RUNNER_STATES.REJOIN, "rejoin"); return; }
+        if (!runner.running) { sm.transition(RUNNER_STATES.STOPPED, runner.startedAt ? "stop" : "standby"); return; }
+        if (runner.combatMode) { sm.transition(RUNNER_STATES.COMBAT, "combat"); return; }
+        if (runner.huntMode) { sm.transition(RUNNER_STATES.HUNT, "hunt"); return; }
+        sm.transition(RUNNER_STATES.CRUISE, "cruise");
+      }
+
       function start() {
         if (runner.running) return;
         const me = getMe();
@@ -4464,6 +4483,7 @@
         runner.planNextAt = 0;
         runner.tickMs = STEP_TICK_MS;
         runner.timer = window.setInterval(step, runner.tickMs);
+        syncStateMachine();
         push("已启动");
         step();
         renderStatus();
@@ -4495,6 +4515,7 @@
         runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
         stopMove();
         setDanger(false);
+        syncStateMachine();
         push("已停止" + (reason ? "：" + reason : ""));
         renderLines();
         renderStatus();
