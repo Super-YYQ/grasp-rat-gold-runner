@@ -1343,6 +1343,8 @@
           // Phase 4:显式状态机(源码 src/core/state-machine.js,内联)。
           // 与 running/combatMode/huntMode/rejoinRecovery/leaveInProgress 保持同步。
           stateMachine: createStateMachine(RUNNER_STATES.STANDBY),
+          // Phase 5:本规划周期的 SpatialGrid(金币/威胁),由 bestDropRoute 构建。
+          routeGrids: null,
           timer: 0,
           statusTimer: 0,
           sidebarSafetyTimer: 0,
@@ -1787,6 +1789,86 @@
           const pad = (value) => String(value).padStart(2, "0");
           return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
         }
+        function randomEntities(count, maxCoord = 5e5, seed = 1) {
+          const out = [];
+          let s = seed >>> 0;
+          const rnd = () => {
+            s = s * 1664525 + 1013904223 >>> 0;
+            return s / 4294967296;
+          };
+          for (let i = 0; i < count; i += 1) {
+            out.push({ x: rnd() * maxCoord, y: rnd() * maxCoord });
+          }
+          return out;
+        }
+        class SpatialGrid {
+          constructor(cellSize = 9e3) {
+            this.cellSize = cellSize;
+            this.map = /* @__PURE__ */ new Map();
+          }
+          _key(x, y) {
+            return Math.floor(x / this.cellSize) + "," + Math.floor(y / this.cellSize);
+          }
+          clear() {
+            this.map.clear();
+            return this;
+          }
+          insert(entity) {
+            const k = this._key(Number(entity.x), Number(entity.y));
+            let arr = this.map.get(k);
+            if (!arr) {
+              arr = [];
+              this.map.set(k, arr);
+            }
+            arr.push(entity);
+            return this;
+          }
+          build(entities) {
+            this.clear();
+            for (const e of entities || []) this.insert(e);
+            return this;
+          }
+          /** 返回圆心 (x,y)、半径 r 覆盖的所有格内的实体(未做圆内精筛)。 */
+          cellsRadius(x, y, r) {
+            const cs = this.cellSize;
+            const minX = Math.floor((x - r) / cs);
+            const maxX = Math.floor((x + r) / cs);
+            const minY = Math.floor((y - r) / cs);
+            const maxY = Math.floor((y + r) / cs);
+            const out = [];
+            for (let cx = minX; cx <= maxX; cx += 1) {
+              for (let cy = minY; cy <= maxY; cy += 1) {
+                const arr = this.map.get(cx + "," + cy);
+                if (arr && arr.length) out.push(...arr);
+              }
+            }
+            return out;
+          }
+          /** 半径 r 圆内实体(含精筛)。 */
+          queryRadius(x, y, r) {
+            const r2 = r * r;
+            const out = [];
+            for (const e of this.cellsRadius(x, y, r)) {
+              const dx = Number(e.x) - x;
+              const dy = Number(e.y) - y;
+              if (dx * dx + dy * dy <= r2) out.push(e);
+            }
+            return out;
+          }
+          /** 半径 r 内最近实体;无则 null。 */
+          nearestWithin(x, y, r) {
+            let best = null;
+            let bestD = Infinity;
+            for (const e of this.cellsRadius(x, y, r)) {
+              const d = Math.hypot(Number(e.x) - x, Number(e.y) - y);
+              if (d <= r && d < bestD) {
+                bestD = d;
+                best = e;
+              }
+            }
+            return best ? { entity: best, dist: bestD } : null;
+          }
+        }
         function routeFirstLegPreferFactor(firstLegCm) {
           const dist = Number(firstLegCm) || 0;
           if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
@@ -1809,6 +1891,137 @@
           if (cos < -0.12) return 0.76;
           if (cos > 0.72) return 1.08;
           return 1;
+        }
+        function buildRouteGrids(candidates, threats, clusterRadius) {
+          const coinGrid = new SpatialGrid(clusterRadius || 9e3).build(candidates || []);
+          const threatGrid = new SpatialGrid(13e3).build(threats || []);
+          return { coinGrid, threatGrid, clusterRadius: clusterRadius || 9e3 };
+        }
+        function dropClusterValueGrid(grid, drop, candidatesIndex, radius, weight) {
+          const scanRadius = radius || grid.clusterRadius;
+          const valueWeight = weight == null ? 0.65 : weight;
+          const x = Number(drop.x);
+          const y = Number(drop.y);
+          const selfId = idKey(drop.drop_id);
+          let sum = 0;
+          for (const other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
+            if (idKey(other.drop_id) === selfId) continue;
+            const dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
+            if (dist > scanRadius) continue;
+            sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight;
+          }
+          return sum;
+        }
+        function routeClusterStatsGrid(grid, drop, radius) {
+          const scanRadius = radius || grid.clusterRadius;
+          const x = Number(drop.x);
+          const y = Number(drop.y);
+          const selfId = idKey(drop.drop_id);
+          let count = 0;
+          let amount = 0;
+          let weighted = 0;
+          for (const other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
+            if (idKey(other.drop_id) === selfId) continue;
+            const dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
+            if (dist > scanRadius) continue;
+            const value = dropAmount(other);
+            count += 1;
+            amount += value;
+            weighted += value * (1 - dist / scanRadius);
+          }
+          return { count, amount, weighted };
+        }
+        function nearestThreatDistGrid(grid, x, y, radius) {
+          const r = radius == null ? 25e3 : radius;
+          let min = Infinity;
+          for (const t of grid.threatGrid.queryRadius(x, y, r)) {
+            const d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
+            if (d < min) min = d;
+          }
+          return min;
+        }
+        function dropClusterValueBrute(drop, candidates, radius, weight) {
+          const scanRadius = radius || 9e3;
+          const valueWeight = weight == null ? 0.65 : weight;
+          const selfId = idKey(drop.drop_id);
+          let sum = 0;
+          for (const other of candidates || []) {
+            if (idKey(other.drop_id) === selfId) continue;
+            const dist = Math.hypot(Number(other.x) - Number(drop.x), Number(other.y) - Number(drop.y));
+            if (dist > scanRadius) continue;
+            sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight;
+          }
+          return sum;
+        }
+        function nearestThreatDistBrute(x, y, threats, radius) {
+          const r = radius == null ? 25e3 : radius;
+          let min = Infinity;
+          for (const t of threats || []) {
+            const d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
+            if (d <= r && d < min) min = d;
+          }
+          return min;
+        }
+        function makeRoutePlan(route, snapshotVersion, me) {
+          const coinIds = (route && route.drops ? route.drops : []).map((d) => idKey(d.drop_id));
+          return {
+            id: "route:" + (snapshotVersion || 0) + ":" + (coinIds[0] || "none"),
+            coinIds,
+            score: route ? route.score : 0,
+            value: route ? route.value : 0,
+            travelSeconds: route ? route.travelSeconds : 0,
+            minSafetyCm: route && route.minSafetyFactor != null ? route.minSafetyFactor * 25e3 : 25e3,
+            createdAt: me && me.__now || Date.now(),
+            snapshotVersion: snapshotVersion || 0
+          };
+        }
+        function createArrivalController(opts) {
+          const now = opts && opts.now || (() => Date.now());
+          const confirmMs = opts && opts.confirmMs || 600;
+          const maxNudges = opts && opts.maxNudges || 2;
+          const blacklistMs = opts && opts.blacklistMs || 8e3;
+          let arrivalId = null;
+          let arrivedAt = 0;
+          let nudges = 0;
+          return {
+            // 每拍调用:areWeAtCoin = 当前是否已贴近某枚金币;coinId = 该金币 id。
+            // 返回 { action: "wait"|"nudge"|"skip"|"move", coinId, nudgeIndex }
+            tick(areWeAtCoin, coinId) {
+              const t = now();
+              if (!areWeAtCoin) {
+                arrivalId = null;
+                arrivedAt = 0;
+                nudges = 0;
+                return { action: null };
+              }
+              const id = String(coinId);
+              if (arrivalId !== id) {
+                arrivalId = id;
+                arrivedAt = t;
+                nudges = 0;
+              }
+              if (t - arrivedAt < confirmMs) {
+                return { action: "wait", coinId: id };
+              }
+              if (nudges < maxNudges) {
+                nudges += 1;
+                arrivedAt = t;
+                return { action: "nudge", coinId: id, nudgeIndex: nudges };
+              }
+              arrivalId = null;
+              arrivedAt = 0;
+              nudges = 0;
+              return { action: "skip", coinId: id, blacklistMs };
+            },
+            reset() {
+              arrivalId = null;
+              arrivedAt = 0;
+              nudges = 0;
+            },
+            get state() {
+              return { arrivalId, arrivedAt, nudges };
+            }
+          };
         }
         function contractPresent2(value, expectation) {
           if (typeof value === "undefined" || value === null || value === false) return false;
@@ -3318,11 +3531,17 @@
           return startAutoFireBurst(me, target, targetName);
         }
         function minRichEnemyDistanceAt(x, y, enemies) {
+          if (runner.routeGrids) {
+            return nearestThreatDistGrid(runner.routeGrids, x, y, RICH_ENEMY_SCAN_CM);
+          }
           return minDistanceToEntities(x, y, enemies);
         }
         function dropClusterValue(drop, candidates, radius, weight) {
           const scanRadius = radius || DROP_CLUSTER_CM;
           const valueWeight = weight == null ? 0.65 : weight;
+          if (runner.routeGrids && !radius) {
+            return dropClusterValueGrid(runner.routeGrids, drop, null, DROP_CLUSTER_CM, valueWeight);
+          }
           let sum = 0;
           for (const other of candidates || []) {
             if (idKey(other.drop_id) === idKey(drop.drop_id)) continue;
@@ -3344,6 +3563,9 @@
           return (amount + cluster) / (seconds + 1.6) * safetyFactor * sameTargetBias * routeFirstLegPreferFactor(firstLeg);
         }
         function routeClusterStats(drop, candidates) {
+          if (runner.routeGrids) {
+            return routeClusterStatsGrid(runner.routeGrids, drop, ROUTE_CLUSTER_CM);
+          }
           let count = 0;
           let amount = 0;
           let weighted = 0;
@@ -3494,7 +3716,11 @@
         function bestDropRoute(me, enemies) {
           const threats = enemies || richEnemies(me, RICH_ENEMY_SCAN_CM);
           const candidates = coinCandidates(me, threats);
-          if (!candidates.length) return null;
+          if (!candidates.length) {
+            runner.routeGrids = null;
+            return null;
+          }
+          runner.routeGrids = buildRouteGrids(candidates, threats, ROUTE_CLUSTER_CM);
           const bySingleAll = [...candidates].sort((a, b) => b.score - a.score || a.dist - b.dist);
           const bySingle = bySingleAll.slice(0, 12);
           const byCluster = [...candidates].sort(

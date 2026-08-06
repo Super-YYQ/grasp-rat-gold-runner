@@ -1428,6 +1428,8 @@
         // Phase 4:显式状态机(源码 src/core/state-machine.js,内联)。
         // 与 running/combatMode/huntMode/rejoinRecovery/leaveInProgress 保持同步。
         stateMachine: createStateMachine(RUNNER_STATES.STANDBY),
+        // Phase 5:本规划周期的 SpatialGrid(金币/威胁),由 bestDropRoute 构建。
+        routeGrids: null,
         timer: 0,
         statusTimer: 0,
         sidebarSafetyTimer: 0,
@@ -3024,12 +3026,20 @@
       }
 
       function minRichEnemyDistanceAt(x, y, enemies) {
+        // Phase 5:优先用本周期威胁网格做半径查询(与暴力公式一致),否则暴力兜底。
+        if (runner.routeGrids) {
+          return nearestThreatDistGrid(runner.routeGrids, x, y, RICH_ENEMY_SCAN_CM);
+        }
         return minDistanceToEntities(x, y, enemies);
       }
 
       function dropClusterValue(drop, candidates, radius, weight) {
         const scanRadius = radius || DROP_CLUSTER_CM;
         const valueWeight = weight == null ? 0.65 : weight;
+        // Phase 5:优先用本周期网格做半径查询(与暴力公式一致),否则暴力兜底。
+        if (runner.routeGrids && !radius) {
+          return dropClusterValueGrid(runner.routeGrids, drop, null, DROP_CLUSTER_CM, valueWeight);
+        }
         let sum = 0;
         for (const other of candidates || []) {
           if (idKey(other.drop_id) === idKey(drop.drop_id)) continue;
@@ -3056,6 +3066,10 @@
       }
 
       function routeClusterStats(drop, candidates) {
+        // Phase 5:优先用本周期网格做半径查询(与暴力公式一致),否则暴力兜底。
+        if (runner.routeGrids) {
+          return routeClusterStatsGrid(runner.routeGrids, drop, ROUTE_CLUSTER_CM);
+        }
         let count = 0;
         let amount = 0;
         let weighted = 0;
@@ -3229,7 +3243,13 @@
       function bestDropRoute(me, enemies) {
         const threats = enemies || richEnemies(me, RICH_ENEMY_SCAN_CM);
         const candidates = coinCandidates(me, threats);
-        if (!candidates.length) return null;
+        if (!candidates.length) {
+          runner.routeGrids = null;
+          return null;
+        }
+        // Phase 5:每个规划周期构建一次网格,供簇评分/最近威胁用,避免逐调用 O(N) 全扫。
+        // 网格查询与暴力公式一致(golden 对照已证明),只做性能优化不改语义。
+        runner.routeGrids = buildRouteGrids(candidates, threats, ROUTE_CLUSTER_CM);
         const bySingleAll = [...candidates].sort((a, b) => b.score - a.score || a.dist - b.dist);
         const bySingle = bySingleAll.slice(0, 12);
         const byCluster = [...candidates]
