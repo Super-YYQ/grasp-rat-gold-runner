@@ -8,16 +8,16 @@
 
 ## 版本流程
 
-1. 修改 `src/grasp-rat-gold-runner.user.js`。
-2. 更新 userscript 头部 `@version` 和 `package.json` 版本（`node scripts/check-userscript-version.mjs` 会校验一致）。
+1. 修改 `src/entries/desktop.user.js` 或 `src/entries/mobile.user.js`。
+2. 更新版本：PC 改 `package.json` 的 `version`（`scripts/userscript-meta.mjs` 自动读取）；Mobile 改 `scripts/userscript-meta.mjs` 的 `mobileMeta.version`。
 3. 更新 `docs/changelog.md`。
-4. 同步发布版：
+4. 重新生成发布版（esbuild 确定性构建）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sync-dist.ps1
+npm run build
 ```
 
-5. 执行发布检查（跨平台，含语法、src/dist 哈希、导航/重连/DOM/契约测试、版本一致、禁用 CSS）：
+5. 执行发布检查（跨平台，内部会先 build，再验证版本一致、语法、clean tree、导航/重连/DOM/契约测试、禁用 CSS）：
 
 ```powershell
 npm run release:check
@@ -60,8 +60,8 @@ npm run capture:baseline
 
 ## 发布文件
 
-- `src/grasp-rat-gold-runner.user.js` 是 PC 版开发源文件。
-- `src/grasp-rat-gold-runner-mobile.user.js` 是手机端独立开发源文件。
-- `dist/grasp-rat-gold-runner.user.js` 是 PC 版发布文件。
-- `dist/grasp-rat-gold-runner-mobile.user.js` 是手机端发布文件。
-- 发布前每个源码都必须与对应 dist 文件完全一致。
+- `src/entries/desktop.user.js` 是 PC 版开发源文件（IIFE 体，无 metadata 头）。
+- `src/entries/mobile.user.js` 是手机端独立开发源文件（IIFE 体，无 metadata 头）。
+- `dist/grasp-rat-gold-runner.user.js` 是 PC 版发布文件（esbuild 构建）。
+- `dist/grasp-rat-gold-runner-mobile.user.js` 是手机端发布文件（esbuild 构建）。
+- 发布前必须重新 `npm run build`，保证 dist 与源码一致、两次构建哈希一致。

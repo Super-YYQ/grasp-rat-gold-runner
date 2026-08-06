@@ -11,12 +11,13 @@
 
 ## 项目入口
 
-- PC 版主要编辑文件：`src/grasp-rat-gold-runner.user.js`
-- PC 版发布文件：`dist/grasp-rat-gold-runner.user.js`
-- 手机端独立源码：`src/grasp-rat-gold-runner-mobile.user.js`
-- 手机端发布文件：`dist/grasp-rat-gold-runner-mobile.user.js`
-- 改完源码后必须同步到 `dist`。
-- 不要继续改旧会话目录里的脚本，旧目录只作为历史备份。
+- PC 版主要编辑文件：`src/entries/desktop.user.js`
+- PC 版发布文件：`dist/grasp-rat-gold-runner.user.js`（由 esbuild 构建生成）
+- 手机端独立源码：`src/entries/mobile.user.js`
+- 手机端发布文件：`dist/grasp-rat-gold-runner-mobile.user.js`（由 esbuild 构建生成）
+- userscript 元数据（`@name`/`@version`/`@match` 等）单一来源：`scripts/userscript-meta.mjs`
+- 改完源码后**必须**运行 `npm run build` 重新生成 `dist`（确定性构建，两次产物哈希一致）。
+- 不要手工编辑 `dist/`，也不要继续改旧会话目录里的脚本，旧目录只作为历史备份。
 
 ## 核心运行方式
 
@@ -139,8 +140,8 @@ node --check .\dist\grasp-rat-gold-runner-mobile.user.js
 
 ## 发布流程
 
-1. 按目标平台改 `src/grasp-rat-gold-runner.user.js` 或 `src/grasp-rat-gold-runner-mobile.user.js`。
-2. 更新对应 userscript 头部 `@version`。
-3. 运行 `scripts\sync-dist.ps1` 同步到 `dist`。
-4. 跑语法检查和 release check。
+1. 按目标平台改 `src/entries/desktop.user.js` 或 `src/entries/mobile.user.js`。
+2. 更新版本：PC 改 `package.json` 的 `version`（`scripts/userscript-meta.mjs` 自动读取）；Mobile 改 `scripts/userscript-meta.mjs` 的 `mobileMeta.version`。
+3. 运行 `npm run build` 重新生成 `dist`（esbuild 确定性构建）。
+4. 跑 `npm run test` 与 `npm run release:check`（release check 内部会先 build，再校验版本/语法/clean tree/测试/禁用 CSS/fixture）。
 5. 在 `docs/changelog.md` 写一条变更。

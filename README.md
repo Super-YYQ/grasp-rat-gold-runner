@@ -102,11 +102,12 @@ PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-
 ```text
 grasp-rat-gold-runner/
   src/
-    grasp-rat-gold-runner.user.js          # PC 版源码
-    grasp-rat-gold-runner-mobile.user.js   # 手机端独立源码
+    entries/
+      desktop.user.js               # PC 版源码（IIFE 体，无 metadata 头）
+      mobile.user.js                # 手机端独立源码（IIFE 体，无 metadata 头）
   dist/
-    grasp-rat-gold-runner.user.js          # PC 版发布脚本
-    grasp-rat-gold-runner-mobile.user.js   # 手机端发布脚本
+    grasp-rat-gold-runner.user.js          # PC 版发布脚本（esbuild 构建）
+    grasp-rat-gold-runner-mobile.user.js   # 手机端发布脚本（esbuild 构建）
   docs/
     behavior.md                     # 详细行为规则和优先级
     mobile.md                       # 手机端取舍和交互说明
@@ -114,25 +115,27 @@ grasp-rat-gold-runner/
     development.md                  # 开发与发布流程
     changelog.md                    # 版本记录
   scripts/
-    sync-dist.ps1                   # 同步 src 到 dist
-    release-check.ps1               # 发布前检查
+    build.mjs                       # 确定性 esbuild 构建（src/entries → dist）
+    userscript-meta.mjs             # userscript 元数据单一来源（@name/@version/@match 等）
+    release-check.mjs               # 跨平台发布门禁（先 build 再校验）
+    release-check.ps1               # Windows 包装
   AGENTS.md                         # 给后续 agent 的项目手册
 ```
 
 ## 开发
 
-PC 功能改 `src/grasp-rat-gold-runner.user.js`；手机端功能改 `src/grasp-rat-gold-runner-mobile.user.js`。发布前同步到 `dist`：
+PC 功能改 `src/entries/desktop.user.js`；手机端功能改 `src/entries/mobile.user.js`。发布前用 esbuild 重新生成 `dist`：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sync-dist.ps1
+npm run build
 ```
 
 语法检查：
 
 ```powershell
-node --check .\src\grasp-rat-gold-runner.user.js
+node --check .\src\entries\desktop.user.js
 node --check .\dist\grasp-rat-gold-runner.user.js
-node --check .\src\grasp-rat-gold-runner-mobile.user.js
+node --check .\src\entries\mobile.user.js
 node --check .\dist\grasp-rat-gold-runner-mobile.user.js
 ```
 
