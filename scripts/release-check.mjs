@@ -53,6 +53,7 @@ run({ file: process.execPath, args: ["scripts/test-reconnect-dom.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-contract.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-spatial.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-nav-property.mjs"] });
+run({ file: process.execPath, args: ["scripts/test-ids-stamina.mjs"] });
 
 // 5) 禁用 CSS(毛玻璃)
 const allUserscriptText = sources.map(s => fs.readFileSync(join(s), "utf8")).join("\n");

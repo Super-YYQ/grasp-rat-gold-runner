@@ -5,7 +5,7 @@
   "description": "Tampermonkey userscripts for Grasp Rat Game desktop and mobile coin collection automation.",
   "scripts": {
     "check": "node --check src/grasp-rat-gold-runner.user.js && node --check dist/grasp-rat-gold-runner.user.js && node --check src/grasp-rat-gold-runner-mobile.user.js && node --check dist/grasp-rat-gold-runner-mobile.user.js",
-    "test": "node scripts/test-coin-nav.mjs && node scripts/test-reconnect-safety.mjs && node scripts/test-reconnect-dom.mjs && node scripts/test-contract.mjs && node scripts/test-spatial.mjs && node scripts/test-nav-property.mjs",
+    "test": "node scripts/test-coin-nav.mjs && node scripts/test-reconnect-safety.mjs && node scripts/test-reconnect-dom.mjs && node scripts/test-contract.mjs && node scripts/test-spatial.mjs && node scripts/test-nav-property.mjs && node scripts/test-ids-stamina.mjs",
     "test:nav": "node scripts/test-coin-nav.mjs",
     "test:reconnect": "node scripts/test-reconnect-safety.mjs",
     "test:reconnect-dom": "node scripts/test-reconnect-dom.mjs",
