@@ -56,6 +56,7 @@ run({ file: process.execPath, args: ["scripts/test-ids-stamina.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-shared.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-adapter.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-core.mjs"] });
+run({ file: process.execPath, args: ["scripts/test-nav-core.mjs"] });
 
 // 5) 禁用 CSS(毛玻璃)
 const allUserscriptText = sources.map(s => fs.readFileSync(join(s), "utf8")).join("\n");

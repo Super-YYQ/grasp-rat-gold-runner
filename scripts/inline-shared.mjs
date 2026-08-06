@@ -74,6 +74,27 @@ function extractDecls(modulePath) {
     decls.push(decl);
   }
 
+  // export class (类声明,配平花括号)
+  const classRe = /^export\s+class\s+([A-Za-z_$][\w$]*)/gm;
+  while ((m = classRe.exec(src))) {
+    const start = m.index;
+    const bodyStart = src.indexOf("{", m.index + m[0].length);
+    if (bodyStart < 0) continue;
+    let depth = 0;
+    let end = -1;
+    for (let i = bodyStart; i < src.length; i++) {
+      const c = src[i];
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) { end = i + 1; break; }
+      }
+    }
+    if (end < 0) continue;
+    let decl = src.slice(start, end).replace(/^export\s+/, "");
+    decls.push(decl);
+  }
+
   return decls;
 }
 
@@ -107,7 +128,10 @@ export function sharedInlineText(entrySource) {
     path.join(sharedDir, "numbers.js"),
     path.join(sharedDir, "geometry.js"),
     path.join(sharedDir, "time.js"),
+    path.join(navDir, "spatial-grid.js"),
     path.join(navDir, "route-score.js"),
+    path.join(navDir, "route-planner.js"),
+    path.join(navDir, "arrival-controller.js"),
     path.join(gameDir, "contract.js"),
     path.join(gameDir, "entity-normalizer.js"),
     path.join(gameDir, "state-adapter.js"),
