@@ -1535,22 +1535,19 @@
       // 游戏契约探测(fail closed):构造字段报告,调用沙盒内唯一分类器分级。
       // READY=全部必需+关键可选都在;DEGRADED=必需在但画布/指针缺失,读展示可用、
       // 自动移动/攻击关闭;INCOMPATIBLE=必需缺失,不注入控制、提示导出诊断。
+      // Phase 3:字段采集与分级委托给 GameContractProbe(内联的 src/game/contract.js)。
       try {
         const s = typeof state !== "undefined" ? state : null;
         const d = typeof els !== "undefined" ? els : null;
-        const contractFields = {
-          "state": s,
-          "state.entities": s && s.entities,
-          "state.coinDrops": s && s.coinDrops,
-          "state.keys": s && s.keys,
-          "state.currentUserId": s && s.currentUserId,
-          "state.minimap": s && s.minimap ? s.minimap.points : undefined,
-          "state.pointerWorld": s && s.pointerWorld,
-          "sendVelocity": typeof sendVelocity !== "undefined" ? sendVelocity : undefined,
-          "canvas": (d && d.canvas) || (typeof canvas !== "undefined" ? canvas : undefined),
-          "screenCenter": (d && d.screenCenter) || (typeof screenCenter !== "undefined" ? screenCenter : undefined),
-          "setPointerFromClient": (d && d.setPointerFromClient) || (typeof setPointerFromClient !== "undefined" ? setPointerFromClient : undefined)
+        const game = {
+          state: s,
+          els: d,
+          sendVelocity: typeof sendVelocity !== "undefined" ? sendVelocity : undefined,
+          canvas: (d && d.canvas) || (typeof canvas !== "undefined" ? canvas : undefined),
+          screenCenter: (d && d.screenCenter) || (typeof screenCenter !== "undefined" ? screenCenter : undefined),
+          setPointerFromClient: (d && d.setPointerFromClient) || (typeof setPointerFromClient !== "undefined" ? setPointerFromClient : undefined)
         };
+        const contractFields = buildContractReport(game);
         const classifier = (window.__crgrContract && window.__crgrContract.classify) || null;
         const verdict = classifier ? classifier(contractFields) : null;
         if (verdict) {

@@ -959,6 +959,285 @@
           if (cos > 0.72) return 1.08;
           return 1;
         }
+        function contractPresent(value, expectation) {
+          if (typeof value === "undefined" || value === null || value === false) return false;
+          if (expectation === "function") return typeof value === "function";
+          if (expectation === "array") return Array.isArray(value);
+          if (expectation === "Set-like") {
+            return value && (value instanceof Set || typeof value.add === "function" || typeof value.has === "function" || typeof value.delete === "function");
+          }
+          if (expectation === "HTMLElement") {
+            return typeof value === "object" && typeof value.getContext === "function";
+          }
+          if (expectation === "present") return true;
+          if (expectation === "object") return typeof value === "object" && !Array.isArray(value);
+          return true;
+        }
+        function classifyGameContract(report) {
+          const out = { status: "READY", missing: [], criticalMissing: [], report: {} };
+          for (const [key, expect] of GAME_CONTRACT_REQUIRED) {
+            const value = report ? report[key] : void 0;
+            const ok = contractPresent(value, expect);
+            out.report[key] = ok ? expect : "missing";
+            if (!ok) out.missing.push(key);
+          }
+          for (const [key, expect] of GAME_CONTRACT_OPTIONAL_CRITICAL) {
+            const value = report ? report[key] : void 0;
+            const ok = contractPresent(value, expect);
+            out.report[key] = ok ? expect : "missing";
+            if (!ok) out.criticalMissing.push(key);
+          }
+          if (out.missing.length) out.status = "INCOMPATIBLE";
+          else if (out.criticalMissing.length) out.status = "DEGRADED";
+          else out.status = "READY";
+          return out;
+        }
+        function buildContractReport(game) {
+          const s = game && game.state;
+          const d = game && game.els;
+          return {
+            "state": s,
+            "state.entities": s && s.entities,
+            "state.coinDrops": s && s.coinDrops,
+            "state.keys": s && s.keys,
+            "state.currentUserId": s && s.currentUserId,
+            "state.minimap": s && s.minimap ? s.minimap.points : void 0,
+            "state.pointerWorld": s && s.pointerWorld,
+            "sendVelocity": game && game.sendVelocity,
+            "canvas": d && d.canvas || game.canvas,
+            "screenCenter": d && d.screenCenter || game.screenCenter,
+            "setPointerFromClient": d && d.setPointerFromClient || game.setPointerFromClient
+          };
+        }
+        function normalizePlayer(raw) {
+          if (!raw || typeof raw !== "object") return null;
+          const x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null);
+          const y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null);
+          return {
+            id: String(raw.user_id ?? raw.userId ?? raw.uid ?? ""),
+            x,
+            y,
+            hp: numberFrom(raw, ["hp", "health", "life_value", "current_hp"], null),
+            life: raw.life ?? null,
+            name: (raw.name ?? raw.userName ?? raw.username) != null ? String(raw.name ?? raw.userName ?? raw.username) : null,
+            vx: numberFrom(raw, ["vx", "vel_x", "velocity_x", "speed_x"], 0),
+            vy: numberFrom(raw, ["vy", "vel_y", "velocity_y", "speed_y"], 0),
+            drop: numberFrom(raw, ["death_reward_preview", "death_drop_coins"], 0)
+          };
+        }
+        function normalizeCoin(raw) {
+          if (!raw || typeof raw !== "object") return null;
+          const x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null);
+          const y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null);
+          const amount = Number(raw.amount);
+          return {
+            id: String(raw.drop_id ?? raw.coinId ?? raw.id ?? ""),
+            x,
+            y,
+            amount: Number.isFinite(amount) && amount > 0 ? amount : null
+          };
+        }
+        function normalizeProjectile(raw) {
+          if (!raw || typeof raw !== "object") return null;
+          const id = String(raw.projectile_id ?? raw.bullet_id ?? raw.shot_id ?? raw.id ?? raw.uid ?? "");
+          return {
+            id,
+            startX: numberFrom(raw, ["start_x", "pos_x", "world_x", "x"], null),
+            startY: numberFrom(raw, ["start_y", "pos_y", "world_y", "y"], null),
+            vx: numberFrom(raw, ["vx", "vel_x", "velocity_x", "speed_x"], 0),
+            vy: numberFrom(raw, ["vy", "vel_y", "velocity_y", "speed_y"], 0),
+            owner: raw.owner_user_id != null ? String(raw.owner_user_id) : null
+          };
+        }
+        function gameStateSnapshot(deps) {
+          const state2 = deps && deps.state;
+          const now = deps && deps.now != null ? deps.now : Date.now();
+          const selfId = deps && deps.selfId != null ? String(deps.selfId) : null;
+          const snapshot2 = {
+            now,
+            self: null,
+            players: [],
+            coins: [],
+            projectiles: [],
+            input: { userKeys: [] },
+            contract: { status: "UNKNOWN", missing: [] }
+          };
+          const entities = Array.isArray(state2 && state2.entities) ? state2.entities : [];
+          if (selfId) {
+            for (const raw of entities) {
+              try {
+                if (raw && String(raw.user_id ?? raw.userId ?? raw.uid) === selfId) {
+                  const p = normalizePlayer(raw);
+                  if (p) {
+                    snapshot2.self = {
+                      ...p,
+                      stamina5sMs: numberFrom(raw, ["stamina_5s_remaining_milli", "stamina5s"], null),
+                      stamina1hMs: numberFrom(raw, ["stamina_1h_remaining_milli", "stamina1h"], null),
+                      balance: numberFrom(raw, ["external_balance_snapshot", "balance"], null)
+                    };
+                  }
+                  break;
+                }
+              } catch (_) {
+              }
+            }
+          }
+          for (const raw of entities) {
+            try {
+              const p = normalizePlayer(raw);
+              if (!p) continue;
+              if (selfId && p.id === selfId) continue;
+              snapshot2.players.push(p);
+            } catch (_) {
+            }
+          }
+          const coinDrops = Array.isArray(state2 && state2.coinDrops) ? state2.coinDrops : [];
+          for (const raw of coinDrops) {
+            try {
+              const c = normalizeCoin(raw);
+              if (!c) continue;
+              snapshot2.coins.push(c);
+            } catch (_) {
+            }
+          }
+          const keys = state2 && state2.keys;
+          if (keys && typeof keys.has === "function") {
+            const userKeys = [];
+            for (const k of ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]) {
+              try {
+                if (keys.has(k)) userKeys.push(k);
+              } catch (_) {
+              }
+            }
+            snapshot2.input.userKeys = userKeys;
+          }
+          return snapshot2;
+        }
+        function createControlAdapter(deps) {
+          const state2 = deps && deps.state;
+          const sendVelocity2 = deps && deps.sendVelocity;
+          const scriptMoveKeys = deps && deps.scriptMoveKeys || /* @__PURE__ */ new Set();
+          const findLeaveBtn = deps && deps.findLeaveBtn;
+          function clearScriptKeys() {
+            if (state2 && state2.keys && typeof state2.keys.delete === "function") {
+              for (const key of scriptMoveKeys) {
+                try {
+                  state2.keys.delete(key);
+                } catch (_) {
+                }
+              }
+            }
+            scriptMoveKeys.clear();
+          }
+          function addKey(key) {
+            scriptMoveKeys.add(key);
+            if (state2 && state2.keys && typeof state2.keys.add === "function") {
+              try {
+                state2.keys.add(key);
+              } catch (_) {
+              }
+            }
+          }
+          return {
+            move(vector) {
+              const dx = vector && vector.dx ? vector.dx : 0;
+              const dy = vector && vector.dy ? vector.dy : 0;
+              clearScriptKeys();
+              if (dx < 0) addKey("a");
+              if (dx > 0) addKey("d");
+              if (dy < 0) addKey("w");
+              if (dy > 0) addKey("s");
+              if (typeof sendVelocity2 === "function") {
+                try {
+                  sendVelocity2(true);
+                } catch (_) {
+                }
+              }
+            },
+            stop() {
+              clearScriptKeys();
+              if (typeof sendVelocity2 === "function") {
+                try {
+                  sendVelocity2(true);
+                } catch (_) {
+                }
+              }
+            },
+            leave() {
+              if (!findLeaveBtn) return false;
+              const btn = findLeaveBtn();
+              if (!btn) return false;
+              try {
+                btn.click();
+                return true;
+              } catch (_) {
+                return false;
+              }
+            },
+            fire(pointer) {
+              return { pointer, ok: !!(pointer && Number.isFinite(pointer.x) && Number.isFinite(pointer.y)) };
+            }
+          };
+        }
+        function gameScreenCenter(rect, screenCenter2) {
+          if (typeof screenCenter2 === "function") {
+            try {
+              const point = screenCenter2();
+              const x = Number(point && point.x);
+              const y = Number(point && point.y);
+              if (Number.isFinite(x) && Number.isFinite(y)) {
+                return { x: rect.left + x, y: rect.top + y };
+              }
+            } catch (_) {
+            }
+          }
+          const reservedLeft = window.matchMedia("(max-aspect-ratio: 1/1)").matches ? 0 : Math.min(368, Math.max(0, rect.width - 320));
+          return {
+            x: rect.left + reservedLeft + (rect.width - reservedLeft) / 2,
+            y: rect.top + rect.height / 2
+          };
+        }
+        function gameCameraCenter(me, localVisual) {
+          const visual = localVisual;
+          if (visual && Number.isFinite(Number(visual.x)) && Number.isFinite(Number(visual.y))) {
+            return { x: Number(visual.x), y: Number(visual.y) };
+          }
+          return {
+            x: me ? Number(me.x) : 0,
+            y: me ? Number(me.y) : 0
+          };
+        }
+        function fallbackWorldToClient(me, rect, viewRadiusCm, localVisual) {
+          const shortSide = Math.max(1, Math.min(rect.width, rect.height));
+          const viewRadius = Number(viewRadiusCm);
+          const units = Number.isFinite(viewRadius) && viewRadius > 0 ? viewRadius * 2 / shortSide : 5e4 * 2 / shortSide;
+          const origin = gameScreenCenter(rect);
+          const camera = gameCameraCenter(me, localVisual);
+          return (point) => ({
+            x: origin.x + (Number(point.x) - camera.x) / units,
+            y: origin.y + (Number(point.y) - camera.y) / units
+          });
+        }
+        function worldToClientFactory(me, rootRect, deps) {
+          const rect = deps && deps.canvasRect ? deps.canvasRect() : null;
+          if (typeof deps.viewParams === "function" && typeof deps.worldToScreen === "function") {
+            try {
+              const view = deps.viewParams();
+              return (point) => {
+                const screenPoint = deps.worldToScreen(Number(point.x), Number(point.y), view);
+                return {
+                  x: (rect ? rect.left : 0) + Number(screenPoint.x),
+                  y: (rect ? rect.top : 0) + Number(screenPoint.y)
+                };
+              };
+            } catch (_) {
+            }
+          }
+          if (!rect || rect.width <= 0 || rect.height <= 0) {
+            return fallbackWorldToClient(me, deps.overlayRect || rootRect, deps.viewRadiusCm, deps.localVisual);
+          }
+          return fallbackWorldToClient(me, rect, deps.viewRadiusCm, deps.localVisual);
+        }
         function moveToward(rx, ry, options) {
           const move = steerVector(rx, ry);
           setVelocity(move.dx, move.dy, options);

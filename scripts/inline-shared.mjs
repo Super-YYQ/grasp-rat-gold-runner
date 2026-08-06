@@ -52,18 +52,25 @@ function extractFunctionDecls(modulePath) {
 
 // 内联文本:按依赖顺序拼接所有共享函数声明。
 // desktop 与 mobile 共用同一套共享模块(纯逻辑),因此内联文本相同。
+// Phase 3 起加入 src/game 的 adapter 纯函数(contract/state/control/coordinate/entity)。
 export function sharedInlineText() {
   const sharedDir = path.join(root, "src", "shared");
   const navDir = path.join(root, "src", "strategy", "navigation");
+  const gameDir = path.join(root, "src", "game");
   const modules = [
     path.join(sharedDir, "ids.js"),
     path.join(sharedDir, "numbers.js"),
     path.join(sharedDir, "geometry.js"),
     path.join(sharedDir, "time.js"),
-    path.join(navDir, "route-score.js")
+    path.join(navDir, "route-score.js"),
+    path.join(gameDir, "contract.js"),
+    path.join(gameDir, "entity-normalizer.js"),
+    path.join(gameDir, "state-adapter.js"),
+    path.join(gameDir, "control-adapter.js"),
+    path.join(gameDir, "coordinate-adapter.js")
   ];
   const parts = [];
-  parts.push("    // ---- src/shared + src/strategy 内联(Phase 2,单一真相源) ----");
+  parts.push("    // ---- src/shared + src/strategy + src/game 内联(Phase 2/3,单一真相源) ----");
   for (const mod of modules) {
     for (const decl of extractFunctionDecls(mod)) {
       parts.push("    " + decl.replace(/\n/g, "\n    "));
