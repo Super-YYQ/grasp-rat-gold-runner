@@ -5,7 +5,7 @@
   "description": "Tampermonkey userscripts for Grasp Rat Game desktop and mobile coin collection automation.",
   "scripts": {
     "check": "node --check src/entries/desktop.user.js && node --check dist/grasp-rat-gold-runner.user.js && node --check src/entries/mobile.user.js && node --check dist/grasp-rat-gold-runner-mobile.user.js",
-    "test": "node scripts/build.mjs && node scripts/test-coin-nav.mjs && node scripts/test-reconnect-safety.mjs && node scripts/test-reconnect-dom.mjs && node scripts/test-contract.mjs && node scripts/test-spatial.mjs && node scripts/test-nav-property.mjs && node scripts/test-ids-stamina.mjs && node scripts/test-shared.mjs && node scripts/test-adapter.mjs && node scripts/test-core.mjs && node scripts/test-nav-core.mjs && node scripts/test-safety.mjs",
+    "test": "node scripts/build.mjs && node scripts/test-coin-nav.mjs && node scripts/test-reconnect-safety.mjs && node scripts/test-reconnect-dom.mjs && node scripts/test-contract.mjs && node scripts/test-spatial.mjs && node scripts/test-nav-property.mjs && node scripts/test-ids-stamina.mjs && node scripts/test-shared.mjs && node scripts/test-adapter.mjs && node scripts/test-core.mjs && node scripts/test-nav-core.mjs && node scripts/test-safety.mjs && node scripts/test-combat.mjs",
     "test:nav": "node scripts/test-coin-nav.mjs",
     "test:reconnect": "node scripts/test-reconnect-safety.mjs",
     "test:reconnect-dom": "node scripts/test-reconnect-dom.mjs",

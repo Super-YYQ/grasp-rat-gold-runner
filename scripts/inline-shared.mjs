@@ -122,6 +122,7 @@ export function sharedInlineText(entrySource) {
   const sharedDir = path.join(root, "src", "shared");
   const navDir = path.join(root, "src", "strategy", "navigation");
   const safetyDir = path.join(root, "src", "strategy", "safety");
+  const combatDir = path.join(root, "src", "strategy", "combat");
   const gameDir = path.join(root, "src", "game");
   const coreDir = path.join(root, "src", "core");
   const modules = [
@@ -136,6 +137,10 @@ export function sharedInlineText(entrySource) {
     path.join(safetyDir, "threat-model.js"),
     path.join(safetyDir, "flee-planner.js"),
     path.join(safetyDir, "leave-policy.js"),
+    path.join(combatDir, "aim-predictor.js"),
+    path.join(combatDir, "burst-planner.js"),
+    path.join(combatDir, "target-selector.js"),
+    path.join(combatDir, "fire-controller.js"),
     path.join(gameDir, "contract.js"),
     path.join(gameDir, "entity-normalizer.js"),
     path.join(gameDir, "state-adapter.js"),
