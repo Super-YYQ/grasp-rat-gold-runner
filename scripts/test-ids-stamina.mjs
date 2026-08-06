@@ -20,8 +20,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const sources = {
-  pc: fs.readFileSync(path.join(root, "src", "grasp-rat-gold-runner.user.js"), "utf8"),
-  mobile: fs.readFileSync(path.join(root, "src", "grasp-rat-gold-runner-mobile.user.js"), "utf8")
+  pc: fs.readFileSync(path.join(root, "src", "entries", "desktop.user.js"), "utf8"),
+  mobile: fs.readFileSync(path.join(root, "src", "entries", "mobile.user.js"), "utf8")
 };
 
 let failed = 0;

@@ -196,7 +196,7 @@ test("readDropAmount returns null for missing / zero / non-finite / negative", (
 
 // --- Source wiring checks (PC / mobile userscript must mirror the pure fixes) ---
 test("PC userscript wires whole-segment safety + loop min distance", () => {
-  const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
+  const srcPath = path.join(root, "src", "entries", "desktop.user.js");
   const src = fs.readFileSync(srcPath, "utf8");
   assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "PC source needs whole-leg safety");
   assert.match(src, /minDistanceToEntities/, "PC source needs loop-based min distance");
@@ -208,7 +208,7 @@ test("PC userscript wires whole-segment safety + loop min distance", () => {
 });
 
 test("mobile userscript wires whole-segment safety + loop min distance", () => {
-  const srcPath = path.join(root, "src", "grasp-rat-gold-runner-mobile.user.js");
+  const srcPath = path.join(root, "src", "entries", "mobile.user.js");
   const src = fs.readFileSync(srcPath, "utf8");
   assert.match(src, /minSegmentThreatDistance|pointToSegmentDistance/, "mobile source needs whole-leg safety");
   assert.match(src, /minDistanceToEntities/, "mobile source needs loop-based min distance");
@@ -220,7 +220,7 @@ test("mobile userscript wires whole-segment safety + loop min distance", () => {
 });
 
 test("PC userscript wires coin reach / flee refresh / far-leg prefer", () => {
-  const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
+  const srcPath = path.join(root, "src", "entries", "desktop.user.js");
   const src = fs.readFileSync(srcPath, "utf8");
   assert.match(src, /COIN_REACHED_CM\s*=\s*1[0-9]{2,}/, "PC source needs COIN_REACHED_CM >= 100");
   assert.match(src, /dist\s*<=\s*COIN_REACHED_CM|dist\s*<\s*COIN_REACHED_CM/, "PC coin branch must use COIN_REACHED_CM");
@@ -230,7 +230,7 @@ test("PC userscript wires coin reach / flee refresh / far-leg prefer", () => {
 });
 
 test("mobile userscript shares coin reach fix", () => {
-  const srcPath = path.join(root, "src", "grasp-rat-gold-runner-mobile.user.js");
+  const srcPath = path.join(root, "src", "entries", "mobile.user.js");
   const src = fs.readFileSync(srcPath, "utf8");
   assert.match(src, /COIN_REACHED_CM\s*=\s*1[0-9]{2,}/, "mobile source needs COIN_REACHED_CM >= 100");
   assert.match(src, /TRAVEL_TICK_AXIS_DIV|axis \/ 42/, "mobile should use corrected axis travel divisor");
@@ -239,7 +239,7 @@ test("mobile userscript shares coin reach fix", () => {
 
 // --- §6 自动攻击安全化(PC) wiring ---
 test("PC userscript wires auto-attack safety (§6)", () => {
-  const srcPath = path.join(root, "src", "grasp-rat-gold-runner.user.js");
+  const srcPath = path.join(root, "src", "entries", "desktop.user.js");
   const src = fs.readFileSync(srcPath, "utf8");
   assert.match(src, /AUTO_FIRE_RESERVE_SHOTS/, "§6.1 whole-group stamina reserve");
   assert.match(src, /burstTargetStillValid/, "§6.2 fresh-target mid-burst abort");
@@ -249,7 +249,7 @@ test("PC userscript wires auto-attack safety (§6)", () => {
 
 // --- §5.7 到达金币确认/轻推/黑名单 wiring ---
 test("PC & mobile wire coin-arrival confirm/nudge/blacklist (§5.7)", () => {
-  for (const f of ["src/grasp-rat-gold-runner.user.js", "src/grasp-rat-gold-runner-mobile.user.js"]) {
+  for (const f of ["src/entries/desktop.user.js", "src/entries/mobile.user.js"]) {
     const src = fs.readFileSync(path.join(root, f), "utf8");
     assert.match(src, /coinArrivalNudges/, `${f} needs arrival-nudge state`);
     assert.match(src, /coinBlacklist\.set\(id, nowArr \+ 8000/, `${f} needs temp blacklist on non-confirmed coin`);

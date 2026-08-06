@@ -4,7 +4,7 @@
   "private": true,
   "description": "Tampermonkey userscripts for Grasp Rat Game desktop and mobile coin collection automation.",
   "scripts": {
-    "check": "node --check src/grasp-rat-gold-runner.user.js && node --check dist/grasp-rat-gold-runner.user.js && node --check src/grasp-rat-gold-runner-mobile.user.js && node --check dist/grasp-rat-gold-runner-mobile.user.js",
+    "check": "node --check src/entries/desktop.user.js && node --check dist/grasp-rat-gold-runner.user.js && node --check src/entries/mobile.user.js && node --check dist/grasp-rat-gold-runner-mobile.user.js",
     "test": "node scripts/test-coin-nav.mjs && node scripts/test-reconnect-safety.mjs && node scripts/test-reconnect-dom.mjs && node scripts/test-contract.mjs && node scripts/test-spatial.mjs && node scripts/test-nav-property.mjs && node scripts/test-ids-stamina.mjs",
     "test:nav": "node scripts/test-coin-nav.mjs",
     "test:reconnect": "node scripts/test-reconnect-safety.mjs",
@@ -14,10 +14,12 @@
     "test:property": "node scripts/test-nav-property.mjs",
     "version:check": "node scripts/check-userscript-version.mjs",
     "capture:baseline": "node scripts/capture-game-baseline.mjs",
-    "sync:dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sync-dist.ps1",
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --sourcemap",
     "release:check": "node scripts/release-check.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.28.1",
     "jsdom": "^24.1.3",
     "playwright": "^1.45.0"
   }

@@ -3,7 +3,6 @@
 // 依次执行:版本一致 → 语法 → src/dist 哈希 → 导航/重连/DOM 测试 → 禁用 CSS。
 // PowerShell 的 release-check.ps1 仅作为包装调用本脚本。
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,31 +18,31 @@ function run(cli) {
   }
 }
 
-// 1) 版本一致性
+// 0) 先构建(Phase 1:release check 先 build,再校验产物)
+run({ file: process.execPath, args: ["scripts/build.mjs"] });
+
+// 1) 版本一致性(meta 单一来源)
 run({ file: process.execPath, args: ["scripts/check-userscript-version.mjs"] });
 
-// 2) 语法检查
+// 2) 语法检查(入口 + 构建产物)
 const sources = [
-  "src/grasp-rat-gold-runner.user.js",
+  "src/entries/desktop.user.js",
   "dist/grasp-rat-gold-runner.user.js",
-  "src/grasp-rat-gold-runner-mobile.user.js",
+  "src/entries/mobile.user.js",
   "dist/grasp-rat-gold-runner-mobile.user.js"
 ];
 for (const s of sources) {
   run({ file: process.execPath, args: ["--check", s] });
 }
 
-// 3) src/dist 哈希一致性(改 src 后必须先同步 dist)
-const pairs = [
-  ["src/grasp-rat-gold-runner.user.js", "dist/grasp-rat-gold-runner.user.js"],
-  ["src/grasp-rat-gold-runner-mobile.user.js", "dist/grasp-rat-gold-runner-mobile.user.js"]
-];
-for (const [src, dist] of pairs) {
-  const hash = f => createHash("sha256").update(fs.readFileSync(join(f))).digest("hex");
-  if (hash(src) !== hash(dist)) {
-    console.error(`src/dist 不一致:${src} 与 ${dist}。请先运行 scripts/sync-dist.ps1。`);
-    process.exit(1);
-  }
+// 3) 工作区 clean 校验:修改 src/entries 后必须 build 出与之一致的 dist。
+//    build 已重跑,这里通过 git 检查构建产物是否使工作区变为 clean(即上次构建已提交)。
+const { execSync } = await import("node:child_process");
+try {
+  execSync("git diff --quiet -- src/entries dist", { cwd: root });
+} catch (_) {
+  console.error("构建后 src/entries 或 dist 仍有未提交改动。请先提交,再跑 release check。");
+  process.exit(1);
 }
 
 // 4) 测试(nav + reconnect 状态机 + reconnect DOM fixture)

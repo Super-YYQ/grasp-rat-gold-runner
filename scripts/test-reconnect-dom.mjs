@@ -9,7 +9,7 @@ import { JSDOM } from "jsdom";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
-const source = fs.readFileSync(path.join(root, "src", "grasp-rat-gold-runner.user.js"), "utf8");
+const source = fs.readFileSync(path.join(root, "src", "entries", "desktop.user.js"), "utf8");
 const FIX = p => fs.readFileSync(path.join(root, "test", "fixtures", p), "utf8");
 
 const OAUTH_URL = "https://connect.linux.do/oauth2/authorize";

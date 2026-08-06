@@ -1,18 +1,3 @@
-// ==UserScript==
-// @name         Grasp Rat Gold Runner
-// @namespace    https://grasp-rat-game.h-e.top/
-// @version      1.9.13
-// @description  Auto collect coin drops with HP-drop leave safety and combat dodge support.
-// @match        https://grasp-rat-game.h-e.top/*
-// @match        https://connect.linux.do/oauth2/authorize*
-// @noframes
-// @run-at       document-end
-// @grant        unsafeWindow
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_deleteValue
-// ==/UserScript==
-
 (function () {
   "use strict";
 

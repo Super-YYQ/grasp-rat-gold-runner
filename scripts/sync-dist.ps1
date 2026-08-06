@@ -1,21 +1,14 @@
+# Phase 1 起,dist 由 esbuild 确定性构建生成,不再手工拷贝 src→dist。
+# 本脚本保留为兼容入口,内部委托给 npm run build。
 $ErrorActionPreference = "Stop"
-
 $root = Split-Path -Parent $PSScriptRoot
-$pairs = @(
-  @{
-    Src = Join-Path $root "src\grasp-rat-gold-runner.user.js"
-    Dist = Join-Path $root "dist\grasp-rat-gold-runner.user.js"
-  },
-  @{
-    Src = Join-Path $root "src\grasp-rat-gold-runner-mobile.user.js"
-    Dist = Join-Path $root "dist\grasp-rat-gold-runner-mobile.user.js"
-  }
-)
 
-foreach ($pair in $pairs) {
-  Copy-Item -LiteralPath $pair.Src -Destination $pair.Dist -Force
-  node --check $pair.Src
-  node --check $pair.Dist
+Push-Location $root
+try {
+  & npm run build
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+  Pop-Location
 }
 
-Write-Host "Synced src to dist and syntax checks passed."
+Write-Host "dist rebuilt by esbuild pipeline (deterministic)."

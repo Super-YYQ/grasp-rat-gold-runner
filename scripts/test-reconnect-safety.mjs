@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
-const source = fs.readFileSync(path.join(root, "src", "grasp-rat-gold-runner.user.js"), "utf8");
+const source = fs.readFileSync(path.join(root, "src", "entries", "desktop.user.js"), "utf8");
 
 const OAUTH_ORIGIN = "https://connect.linux.do";
 const GAME_ORIGIN = "https://grasp-rat-game.h-e.top";
