@@ -1255,6 +1255,197 @@
           DAMAGE: "damage",
           OTHER: "other"
         };
+        function interceptLeadSeconds(me, target, velocity, projectileSpeed, leadMinMs, leadMaxMs) {
+          const rx = Number(target.x) - Number(me.x);
+          const ry = Number(target.y) - Number(me.y);
+          const vx = Number(velocity.vx) || 0;
+          const vy = Number(velocity.vy) || 0;
+          const speed = Math.max(1, Number(projectileSpeed) || 1e4);
+          const min = (leadMinMs == null ? 60 : leadMinMs) / 1e3;
+          const max = (leadMaxMs == null ? 1150 : leadMaxMs) / 1e3;
+          const a = vx * vx + vy * vy - speed * speed;
+          const b = 2 * (rx * vx + ry * vy);
+          const c = rx * rx + ry * ry;
+          let lead = Math.sqrt(c) / speed;
+          if (Math.abs(a) > 1e-3) {
+            const disc = b * b - 4 * a * c;
+            if (disc >= 0) {
+              const root2 = Math.sqrt(disc);
+              const t1 = (-b - root2) / (2 * a);
+              const t2 = (-b + root2) / (2 * a);
+              const positive = [t1, t2].filter((value) => Number.isFinite(value) && value > 0).sort((x, y) => x - y)[0];
+              if (Number.isFinite(positive)) lead = positive;
+            }
+          } else if (Math.abs(b) > 1e-3) {
+            const linear = -c / b;
+            if (Number.isFinite(linear) && linear > 0) lead = linear;
+          }
+          return Math.min(max, Math.max(min, lead));
+        }
+        function predictedPoint(target, velocity, leadSeconds) {
+          return {
+            x: Number(target.x) + (Number(velocity.vx) || 0) * leadSeconds,
+            y: Number(target.y) + (Number(velocity.vy) || 0) * leadSeconds,
+            leadSeconds
+          };
+        }
+        function velocityFromHistory(prev, cur, dtMs) {
+          if (!prev || !cur) return { vx: 0, vy: 0 };
+          const dt = Math.max(0.05, (dtMs == null ? 0 : dtMs) / 1e3);
+          const vx = (Number(cur.x) - Number(prev.x)) / dt;
+          const vy = (Number(cur.y) - Number(prev.y)) / dt;
+          return { vx: Number.isFinite(vx) ? vx : 0, vy: Number.isFinite(vy) ? vy : 0 };
+        }
+        function planBurstShots(staminaMs, minShots, maxShots, costPerShotMs, reserveShots) {
+          const min = minShots == null ? 5 : minShots;
+          const max = maxShots == null ? 8 : maxShots;
+          const cost = costPerShotMs == null ? 500 : costPerShotMs;
+          const reserve = reserveShots == null ? 2 : reserveShots;
+          const s = Number(staminaMs);
+          if (!Number.isFinite(s) || s < 0) return { shots: 0, reason: "stamina-unknown" };
+          const affordable = Math.max(0, Math.floor(s / cost) - reserve);
+          if (affordable < min) return { shots: 0, reason: "insufficient" };
+          const base = min + Math.floor(Math.random() * (max - min + 1));
+          return { shots: Math.min(base, affordable), reason: "ok" };
+        }
+        function planCoverageOffsets(me, target, velocity, count, random) {
+          const rnd = random || Math.random;
+          const targetSpeed = Math.hypot(Number(velocity.vx) || 0, Number(velocity.vy) || 0);
+          const rx = Number(target.x) - Number(me.x);
+          const ry = Number(target.y) - Number(me.y);
+          const dist = Math.max(1, Math.hypot(rx, ry));
+          const moveBasis = targetSpeed > 80 ? { x: (Number(velocity.vx) || 0) / targetSpeed, y: (Number(velocity.vy) || 0) / targetSpeed } : { x: rx / dist, y: ry / dist };
+          const perp = { x: -moveBasis.y, y: moveBasis.x };
+          const along = moveBasis;
+          const spread = Math.min(980, Math.max(220, dist * 0.038 + targetSpeed * 0.075));
+          const pattern = [0, -0.85, 0.85, -0.42, 0.42, -1.22, 1.22, 0.18];
+          const mid = (count - 1) / 2;
+          const offsets = [];
+          for (let i = 0; i < count; i += 1) {
+            const lateral = (pattern[i] != null ? pattern[i] : rnd() * 2.3 - 1.15) * spread;
+            const forward = (i - mid) * spread * 0.18 + (rnd() * 0.24 - 0.12) * spread;
+            offsets.push({
+              x: perp.x * lateral + along.x * forward,
+              y: perp.y * lateral + along.y * forward
+            });
+          }
+          return offsets;
+        }
+        function selectAutoTarget(enemies, lockedEnemy) {
+          if (lockedEnemy && lockedEnemy.life === "Alive") {
+            return { target: lockedEnemy, locked: true };
+          }
+          const candidates = (enemies || []).filter((e) => e && e.life === "Alive" && Number.isFinite(e.hpForFire) && e.hpForFire > 0);
+          if (!candidates.length) return null;
+          const best = candidates.sort(
+            (a, b) => a.hpForFire - b.hpForFire || a.dist - b.dist || String(a.user_id).localeCompare(String(b.user_id))
+          )[0];
+          return { target: best, locked: false };
+        }
+        function validateFireTarget(enemy) {
+          if (!enemy) return { ok: false, reason: "no-target" };
+          if (enemy.life !== "Alive") return { ok: false, reason: "not-alive" };
+          const hp = Number(enemy.hpForFire);
+          if (!Number.isFinite(hp) || hp <= 0) return { ok: false, reason: "no-hp" };
+          return { ok: true, reason: "ok" };
+        }
+        function lockFireRange(lockedEnemy, fireRangeCm) {
+          if (!lockedEnemy) return { inRange: false, locked: false };
+          return {
+            inRange: Number.isFinite(Number(lockedEnemy.dist)) && Number(lockedEnemy.dist) <= fireRangeCm,
+            locked: true
+          };
+        }
+        function createFireController(opts) {
+          const setTimeoutFn = opts && opts.setTimeout || ((fn, ms) => setTimeout(fn, ms));
+          const clearTimeoutFn = opts && opts.clearTimeout || ((id) => clearTimeout(id));
+          const getMe2 = opts && opts.getMe || (() => null);
+          const dispatch = opts && opts.dispatch || (() => {
+          });
+          const validateShot = opts && opts.validateShot || (() => ({ ok: true, reason: "ok" }));
+          const shotMs = opts && opts.shotMs || 100;
+          const randomDelay = opts && opts.randomDelay || (() => 0);
+          let token = 0;
+          let timers = [];
+          let active = false;
+          let stats = { planned: 0, dispatched: 0, confirmed: null };
+          function clearAll(release) {
+            for (const id of timers) clearTimeoutFn(id);
+            timers = [];
+            if (release && active) {
+              const client = stats.lastClient;
+              if (client) {
+                dispatch(client, "mouseup", 0);
+                dispatch(client, "click", 0);
+              }
+            }
+            active = false;
+          }
+          return {
+            // 启动一组连发。shots 已由 burst-planner 预算好。
+            // begin(x, y) 派发首发 mousedown;每发前回调 beforeShot(shotIndex) 做校验。
+            startBurst(shots, begin, beforeShot) {
+              const gen = ++token;
+              clearAll(false);
+              active = true;
+              stats = { planned: shots, dispatched: 0, confirmed: null };
+              const v0 = validateShot();
+              if (!v0.ok) {
+                active = false;
+                return { ok: false, reason: v0.reason };
+              }
+              const first = begin(0);
+              if (!first) {
+                active = false;
+                return { ok: false, reason: "no-client" };
+              }
+              stats.lastClient = first;
+              stats.dispatched += 1;
+              dispatch(first, "mousemove", 0);
+              dispatch(first, "mousedown", 1);
+              for (let i = 1; i < shots; i += 1) {
+                const id = setTimeoutFn(() => {
+                  if (token !== gen || !active) return;
+                  const v = validateShot();
+                  if (!v.ok) {
+                    clearAll(true);
+                    return { ok: false, reason: v.reason, aborted: true };
+                  }
+                  const me = getMe2();
+                  const client = beforeShot ? beforeShot(i, me) : null;
+                  if (!client) return;
+                  stats.lastClient = client;
+                  stats.dispatched += 1;
+                  dispatch(client, "mousemove", 1);
+                }, i * shotMs);
+                timers.push(id);
+              }
+              const holdMs = shots * shotMs + randomDelay();
+              const releaseId = setTimeoutFn(() => {
+                if (token !== gen || !active) return;
+                const releaseClient = stats.lastClient;
+                dispatch(releaseClient, "mouseup", 0);
+                dispatch(releaseClient, "click", 0);
+                active = false;
+                stats.confirmed = null;
+              }, holdMs);
+              timers.push(releaseId);
+              return { ok: true, reason: "ok" };
+            },
+            // 取消当前连发。release=true 时补发 mouseup/click 让游戏按键复位。
+            cancel(release) {
+              token += 1;
+              clearAll(!!release);
+              return this;
+            },
+            get active() {
+              return active;
+            },
+            get stats() {
+              return { ...stats };
+            }
+          };
+        }
         function contractPresent(value, expectation) {
           if (typeof value === "undefined" || value === null || value === false) return false;
           if (expectation === "function") return typeof value === "function";

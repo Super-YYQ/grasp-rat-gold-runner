@@ -2322,10 +2322,8 @@
         if (!enemy || enemy.user_id == null) return false;
         const fresh = visibleAttackTargetById(me, enemy.user_id);
         if (!fresh || fresh === null) return false;
-        if (fresh.life !== "Alive") return false;
-        const hp = Number(fresh.hp || 0);
-        if (!Number.isFinite(hp) || hp <= 0) return false;
-        return true;
+        // Phase 7:目标存活/HP 校验统一委托给 TargetSelector.validateFireTarget。
+        return validateFireTarget(fresh).ok;
       }
 
       function clearAttackLock(reason) {
@@ -2765,31 +2763,8 @@
         return Number.isFinite(observed) ? observed : AUTO_FIRE_DEFAULT_PROJECTILE_SPEED_CMPS;
       }
 
-      function interceptLeadSeconds(me, target, velocity, projectileSpeed) {
-        const rx = Number(target.x) - Number(me.x);
-        const ry = Number(target.y) - Number(me.y);
-        const vx = Number(velocity.vx) || 0;
-        const vy = Number(velocity.vy) || 0;
-        const speed = Math.max(1, Number(projectileSpeed) || AUTO_FIRE_DEFAULT_PROJECTILE_SPEED_CMPS);
-        const a = vx * vx + vy * vy - speed * speed;
-        const b = 2 * (rx * vx + ry * vy);
-        const c = rx * rx + ry * ry;
-        let lead = Math.sqrt(c) / speed;
-        if (Math.abs(a) > 0.001) {
-          const disc = b * b - 4 * a * c;
-          if (disc >= 0) {
-            const root = Math.sqrt(disc);
-            const t1 = (-b - root) / (2 * a);
-            const t2 = (-b + root) / (2 * a);
-            const positive = [t1, t2].filter(value => Number.isFinite(value) && value > 0).sort((x, y) => x - y)[0];
-            if (Number.isFinite(positive)) lead = positive;
-          }
-        } else if (Math.abs(b) > 0.001) {
-          const linear = -c / b;
-          if (Number.isFinite(linear) && linear > 0) lead = linear;
-        }
-        return Math.min(AUTO_FIRE_LEAD_MAX_MS / 1000, Math.max(AUTO_FIRE_LEAD_MIN_MS / 1000, lead));
-      }
+      // Phase 7:interceptLeadSeconds 由 src/strategy/combat/aim-predictor.js 内联提供
+      // (默认参数与 AUTO_FIRE_LEAD_MIN/MAX_MS、AUTO_FIRE_DEFAULT_PROJECTILE_SPEED_CMPS 一致)。
 
       function randomBetween(min, max) {
         return min + Math.random() * (max - min);
@@ -2921,19 +2896,15 @@
       function startAutoFireBurst(me, target, targetName) {
         // §6.1/§6.2:5s 体力未知(NaN/缺失/null/非数字字符串)一律 fail closed,
         // 绝不回退到"随机 5-8 发"打空体力。只有有限非负数值才参与连发预算。
+        // Phase 7:发数规划委托给 BurstPlanner.planBurstShots(纯逻辑,可测试)。
         const stamina = finiteStaminaMs(me && me.stamina_5s_remaining_milli);
-        if (stamina == null) {
-          runner.autoFireStatus = "体力未知·不发射";
+        const plan = planBurstShots(stamina, AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS,
+          AUTO_FIRE_STAMINA_COST_MILLI, AUTO_FIRE_RESERVE_SHOTS);
+        if (stamina == null || plan.shots <= 0) {
+          runner.autoFireStatus = stamina == null ? "体力未知·不发射" : "体力不足(整组预算)";
           return false;
         }
-        // §6.1:为整组连发预留体能预算,并保留余量用于退出/躲避,而不是只查"一发够不够"。
-        let shots = randomInt(AUTO_FIRE_BURST_MIN_SHOTS, AUTO_FIRE_BURST_MAX_SHOTS);
-        const affordable = Math.max(0, Math.floor(stamina / AUTO_FIRE_STAMINA_COST_MILLI) - AUTO_FIRE_RESERVE_SHOTS);
-        if (affordable < AUTO_FIRE_BURST_MIN_SHOTS) {
-          runner.autoFireStatus = "体力不足(整组预算)";
-          return false;
-        }
-        shots = Math.min(shots, affordable);
+        const shots = plan.shots;
         const offsets = autoFireCoverageOffsets(me, target, shots);
         const firstClient = autoFireBurstClient(me, target, offsets[0], 0);
         if (!firstClient) {
