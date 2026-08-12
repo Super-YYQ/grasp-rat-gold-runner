@@ -1,44 +1,40 @@
-# Optimize 分支审计开发进度（2026-08-05 更新）
+# Optimize 分支审计状态（2026-08-12 更新）
 
-> 依据：`C:\Users\闫亚奇\Desktop\grasp-rat-optimize-audit-development-plan.md`
-> 分支：`optimize`（本地 16 个 commit，未推送）
-> 验证：`npm run release:check` 全绿（6 组测试：coin-nav / reconnect-safety / reconnect-dom / contract / spatial / property）
+## 当前结论
 
-## 已完成并验证
+早期文档中标成“待 Phase 2 接线”的核心模块已经在后续提交中完成接线：状态机、调度器、`SpatialGrid`、整段路线安全、导航/安全/战斗纯逻辑模块都已进入桌面构建和测试。原审计状态已过期，不再把这些列为未完成任务。
 
-| 计划项 | 状态 | 说明 |
+2.0.0 进一步完成了原收益模式 proposal 的实际交付，但采用“同一桌面源码、两个构建期 profile”而不是复制一份大 userscript：
+
+- 游走拾荒：`dist/grasp-rat-gold-runner.user.js`
+- 杀敌掠夺：`dist/grasp-rat-raider-runner.user.js`
+
+## 本轮已完成
+
+| 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| §8 基线采集（游戏页） | ✅ | 真实页面确认 `#joinBtn` 契约 + 诱饵按钮；`capture-game-baseline.mjs` 支持 `CRGR_HEADLESS` |
-| §8 OAuth URL 契约 | ✅ | 经游戏页 `/auth/linuxdo/start` 确认真实 `auth_url`；`isExpectedOAuthUrl` 校验成立 |
-| §4.1 重连安全（Phase 1） | ✅ | 默认关 / `NAVIGATE_ONLY` / fail-closed / v3 终态 / 严格 URL / `@noframes` / `@match` 收窄 |
-| §4.4 超时清理 / HUD 清理重试 | ✅ | `clearReconnectState` / `retryReconnectOnce` / HUD 按钮 / FAILED_MANUAL 等终态 |
-| §4.5 契约检查 | ✅ | `classifyGameContract` → READY/DEGRADED/INCOMPATIBLE，fail closed |
-| §5.1 SpatialGrid 模块 | ✅(模块) | `scripts/spatial-grid.mjs` + P95<8ms 预算；接线待 Phase 2 |
-| §5.2 整条线段路径安全 | ✅ | `pointToSegmentDistance` / `minSegmentThreatDistance` |
-| §5.3 Math.min(...map) 循环化 | ✅ | `minDistanceToEntities` |
-| §5.6 金额缺失不追无效目标 | ✅ | `readDropAmount` + 候选过滤 |
-| §5.7 到达确认/轻推/黑名单 | ✅ | 避免永久停住 |
-| §5.9 规避按事件计数 | ✅ | 不再按 tick 累加 |
-| §5.10 不删除用户真实按键 | ✅ | `setVelocity` 只清 scriptMoveKeys |
-| §6.1–§6.4 自动攻击安全化 | ✅ | 整组体能预算 / fresh-target / 无画布 fail-closed / plannedShots |
-| §11.2 属性测试 | ✅ | `test-nav-property.mjs`（并修复 travelTicks / pointToSegmentDistance NaN） |
-| §11.5 / §13.2 发布门禁 + CI | ✅ | 跨平台 `release-check.mjs` + GitHub Actions（Win+Ubuntu+Node LTS） |
-| §13.1 版本一致 | ✅ | `check-userscript-version.mjs`；PC 1.9.12 / package 1.9.12 / mobile 0.1.6 |
-| §13.3 README owner | ✅ | `jzcangshu` → `Super-YYQ` |
-| §13.4 收益模式标记 | ✅ | 标记为 proposal（未交付） |
-| Phase 5 文档 | ✅ | behavior / AGENTS / development / reconnect-security / changelog |
+| 双模式拆分 | ✅ | 互斥安装；旧追杀/交战/攻击按钮从 PC HUD 移除 |
+| 击杀收益与金币收益统一评分 | ✅ | 静止/优势目标、体力预算、15% 切换迟滞 |
+| 追近→开火→掉落拾取闭环 | ✅ | 目标速度预判、距离带、止损、尸点附近优先拾取 |
+| 卡住恢复 | ✅ | 首次重规划，重复无进展升级为离开/重连 |
+| 网络异常恢复 | ✅ | 玩家实体缺失、网络提示、可信 tick 停滞；刷新最多 2 次 |
+| UI 收缩 | ✅ | 控制区 520px→460px，按钮 34px→30px，7 个入口→5 个 |
+| 构建与测试 | ✅ | 三产物确定性构建；profile/watchdog/core/reconnect 等测试纳入门禁 |
 
-## 剩余卡点（外部 / 计划顺序）
+## 竞品调研后的取舍
 
-| 计划项 | 卡点 | 需要什么 |
+- 借鉴统一机会评分、切换迟滞、目标静止时间、击杀后拾取和 transport watchdog（传输看门狗）。
+- 保留本仓库更细的多点金币短路线、整段威胁距离、`SpatialGrid` 和到达轻推/黑名单，因此拾荒路径安全和卡点恢复是主要差异化。
+- 不采用远程热加载器、自建 WebSocket、读取浏览器 token/localStorage 等方案；发布产物继续单文件、自包含、可审计。
+
+## 仍需外部条件验证
+
+| 项目 | 卡点 | 下一步 |
 | --- | --- | --- |
-| §8 OAuth 确权页按钮 DOM | `connect.linux.do` 本机 http/https 均不可达 + 无 LinuxDO 会话 | 已登录测试会话，或确权页脱敏 HTML |
-| §4.1 沙盒迁移（解除 unsafeWindow 桥） | 计划 §1 要求先完成基线采集再动；盲改 4000 行 + 无真机验证风险高 | 模块化（Phase 2）+ 真机验证 |
-| §5.8 路线从当前位置重评 | 需与路线构建器单一公式来源一致，单文件双份维护会漂移 | Phase 2 模块化后接线 |
-| §5.1 SpatialGrid 接线 | 需穿透评分管线（coinCandidates/scoreDrop/routeLegSafetyFactor） | Phase 2 模块化后接线 |
+| 游戏真机回归 | 当前环境连接游戏地址及已打开的 Chrome 会话均超时，代理节点不可用 | 代理可用后验证两种构建各一局：选敌、开火、掉落接管、断网/卡墙恢复、460px HUD |
+| OAuth 确权页真实 DOM | `connect.linux.do` 需要已登录会话 | 采集脱敏 HTML 后补严格 selector fixture；现有未知结构继续 fail closed |
+| 游戏内部字段变化 | `state/els/sendVelocity` 不是公共 API | 真机若出现 `INCOMPATIBLE`，导出不含 token 的契约诊断再更新 adapter |
 
-## 下一步
+## 默认停止边界
 
-- 提供 OAuth 脱敏产物 → 解锁 Phase 2（模块化构建 → §5.8 / SpatialGrid 接线 → §4.1 迁移）。
-- 或授权盲做 Phase 2（接受可能回归）。
-- 或确认推送当前 16 个 commit。
+本轮不做手机端掠夺模式、不做远程更新、不读取 token、不新建自有 WebSocket，也不扩展为全自动登录授权。后续优化优先依据真机数据调整阈值，而不是继续增大 userscript。

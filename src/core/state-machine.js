@@ -4,6 +4,7 @@
 // 状态:
 //   STANDBY   - 未启动(等待 start)
 //   CRUISE    - 金币巡航(默认运行态)
+//   RAID      - 掠夺模式的追近/开火/拾取闭环
 //   HUNT      - 自动追杀
 //   COMBAT    - 临时交战
 //   REJOIN    - 重连安全恢复态
@@ -18,6 +19,7 @@
 export const RUNNER_STATES = {
   STANDBY: "STANDBY",
   CRUISE: "CRUISE",
+  RAID: "RAID",
   HUNT: "HUNT",
   COMBAT: "COMBAT",
   REJOIN: "REJOIN",
@@ -27,13 +29,14 @@ export const RUNNER_STATES = {
 
 // 合法迁移表:state -> 允许进入的后续状态集合。
 export const ALLOWED_TRANSITIONS = {
-  STANDBY: new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED"]),
-  CRUISE: new Set(["HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-  HUNT: new Set(["CRUISE", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-  COMBAT: new Set(["CRUISE", "HUNT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-  REJOIN: new Set(["CRUISE", "COMBAT", "LEAVING", "STOPPED", "STANDBY"]),
+  STANDBY: new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED"]),
+  CRUISE: new Set(["RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+  RAID: new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+  HUNT: new Set(["CRUISE", "RAID", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+  COMBAT: new Set(["CRUISE", "RAID", "HUNT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+  REJOIN: new Set(["CRUISE", "RAID", "COMBAT", "LEAVING", "STOPPED", "STANDBY"]),
   LEAVING: new Set(["STOPPED", "STANDBY"]),
-  STOPPED: new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "STANDBY"])
+  STOPPED: new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "STANDBY"])
 };
 
 export function createStateMachine(initial) {

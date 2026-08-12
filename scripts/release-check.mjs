@@ -28,6 +28,7 @@ run({ file: process.execPath, args: ["scripts/check-userscript-version.mjs"] });
 const sources = [
   "src/entries/desktop.user.js",
   "dist/grasp-rat-gold-runner.user.js",
+  "dist/grasp-rat-raider-runner.user.js",
   "src/entries/mobile.user.js",
   "dist/grasp-rat-gold-runner-mobile.user.js"
 ];
@@ -59,6 +60,7 @@ run({ file: process.execPath, args: ["scripts/test-core.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-nav-core.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-safety.mjs"] });
 run({ file: process.execPath, args: ["scripts/test-combat.mjs"] });
+run({ file: process.execPath, args: ["scripts/test-profiles-watchdog.mjs"] });
 
 // 5) 禁用 CSS(毛玻璃)
 const allUserscriptText = sources.map(s => fs.readFileSync(join(s), "utf8")).join("\n");

@@ -1,8 +1,8 @@
 # 收益模式 (profit-mode) 设计
 
-> 状态: **proposal（设计提案，未交付）**。暂无独立 userscript / src / dist 产物，
-> Changelog 与 README 不应理解为已上线。待 P0 安全重构与模块化（Phase 2）完成后，
-> 复用模块化后的 planner / adapter / fire controller 再实现。
+> 状态: **2.0.0 已交付，本文保留为历史设计输入**。实际交付名为 Raider（杀敌掠夺），
+> 发布文件是 `dist/grasp-rat-raider-runner.user.js`。实现复用同一桌面入口的构建期 profile，
+> 没有复制另一份大源码。实际阈值、止损与恢复规则以 `docs/behavior.md` 为准。
 
 ## Context
 
@@ -22,7 +22,7 @@
 
 ## 交付形态
 
-新增独立 userscript:`src/grasp-rat-profit-runner.user.js`,与 PC/手机脚本并列。沿用 `@grant unsafeWindow`、`pageMain()` 注入方式。安装互斥启用(Tampermonkey禁止同 @match 多脚本冲突由用户自管)。
+由 `src/entries/desktop.user.js` 生成独立发布 userscript `dist/grasp-rat-raider-runner.user.js`，与游走拾荒/手机脚本并列。沿用 `@grant unsafeWindow`、`pageMain()` 注入方式；两个 PC 构建互斥启用。
 
 ## 模块与复用
 

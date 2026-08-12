@@ -3,7 +3,7 @@
 // 手机端是独立组件(自己的版本号),只要求存在 @version。
 // Phase 1 起版本号的单一来源是 scripts/userscript-meta.mjs(从 package.json 读 PC 版本)。
 // 用法:`node scripts/check-userscript-version.mjs`,不一致时退出码非 0。
-import { desktopMeta, mobileMeta } from "./userscript-meta.mjs";
+import { desktopMeta, mobileMeta, raiderMeta } from "./userscript-meta.mjs";
 
 let failed = false;
 
@@ -18,6 +18,10 @@ if (!mobileMeta.version) {
   console.error("mobile userscript 缺少 version"); failed = true;
 } else {
   console.log(`mobile userscript @version ${mobileMeta.version}(独立组件)。`);
+}
+if (raiderMeta.version !== pkgVersion) {
+  console.error(`raider userscript @version=${raiderMeta.version} 与 package=${pkgVersion} 不一致`);
+  failed = true;
 }
 
 // 校验 @version 与 dist 头部一致性(build 后应同步)。
@@ -35,6 +39,7 @@ function distVersion(file) {
 }
 
 const pcDist = distVersion("grasp-rat-gold-runner.user.js");
+const raiderDist = distVersion("grasp-rat-raider-runner.user.js");
 const mobileDist = distVersion("grasp-rat-gold-runner-mobile.user.js");
 if (pcDist !== desktopMeta.version) {
   console.error(`dist PC @version=${pcDist} 与 meta=${desktopMeta.version} 不一致,请先 npm run build`);
@@ -42,6 +47,10 @@ if (pcDist !== desktopMeta.version) {
 }
 if (mobileDist !== mobileMeta.version) {
   console.error(`dist Mobile @version=${mobileDist} 与 meta=${mobileMeta.version} 不一致,请先 npm run build`);
+  failed = true;
+}
+if (raiderDist !== raiderMeta.version) {
+  console.error(`dist Raider @version=${raiderDist} 与 meta=${raiderMeta.version} 不一致,请先 npm run build`);
   failed = true;
 }
 

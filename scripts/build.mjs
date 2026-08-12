@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // 确定性 userscript 构建(Phase 1)。
 // 输入:src/entries/{desktop,mobile}.user.js(纯 IIFE 体,无 metadata 头)
-// 输出:dist/grasp-rat-gold-runner.user.js 与 grasp-rat-gold-runner-mobile.user.js
+// 输出:dist/grasp-rat-gold-runner.user.js、grasp-rat-raider-runner.user.js
+//      与 grasp-rat-gold-runner-mobile.user.js
 //       (esbuild IIFE bundle + 顶部 metadata banner)
 // 保证:
 //   - 输出为单文件,自包含,无动态 import / 远程 @require / 运行时下载;
-//   - target es2020,format iife,不压缩(保持 pageMain.toString() 注入语义);
+//   - target es2020,format iife,只做 syntax folding（保留命名与 pageMain.toString() 注入语义）;
 //   - 构建两次输出哈希一致(确定性);
 //   - 开发 sourcemap 只写 artifacts/(不提交),正式 dist 不含源码路径泄露。
 import { build } from "esbuild";
@@ -13,7 +14,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { desktopMeta, mobileMeta, renderMetadata } from "./userscript-meta.mjs";
+import { desktopMeta, mobileMeta, raiderMeta, renderMetadata } from "./userscript-meta.mjs";
 import { sharedInlineText, spliceSharedInline } from "./inline-shared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +45,7 @@ function prepareEntry(entry) {
   return tmp;
 }
 
-async function buildOne({ entry, out, meta, sourcemap }) {
+async function buildOne({ entry, out, meta, sourcemap, define }) {
   const preparedEntry = prepareEntry(entry);
   const result = await build({
     entryPoints: [preparedEntry],
@@ -53,6 +54,9 @@ async function buildOne({ entry, out, meta, sourcemap }) {
     format: "iife",
     target: "es2020",
     minify: false,
+    // 仅做语法级折叠：保留可读命名/格式，同时清掉构建期 profile 的恒假分支。
+    minifySyntax: true,
+    define: define || {},
     // 不写 sourcemap 到 dist:sourcemap 只在源内嵌 //# sourceMappingURL 时才有用,
     // 我们显式关闭,避免泄露本地路径。
     sourcemap: false,
@@ -74,6 +78,8 @@ async function buildOne({ entry, out, meta, sourcemap }) {
       format: "iife",
       target: "es2020",
       minify: false,
+      minifySyntax: true,
+      define: define || {},
       sourcemap: "inline",
       charset: "utf8",
       logLevel: "warning"
@@ -89,7 +95,18 @@ function hashFile(file) {
 async function main() {
   const devSourcemap = process.argv.includes("--sourcemap");
   const targets = [
-    { entry: "src/entries/desktop.user.js", out: "dist/grasp-rat-gold-runner.user.js", meta: desktopMeta },
+    {
+      entry: "src/entries/desktop.user.js",
+      out: "dist/grasp-rat-gold-runner.user.js",
+      meta: desktopMeta,
+      define: { __CRGR_PROFILE__: JSON.stringify("scavenger") }
+    },
+    {
+      entry: "src/entries/desktop.user.js",
+      out: "dist/grasp-rat-raider-runner.user.js",
+      meta: raiderMeta,
+      define: { __CRGR_PROFILE__: JSON.stringify("raider") }
+    },
     { entry: "src/entries/mobile.user.js", out: "dist/grasp-rat-gold-runner-mobile.user.js", meta: mobileMeta }
   ];
 

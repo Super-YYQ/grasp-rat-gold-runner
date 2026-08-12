@@ -123,6 +123,7 @@ export function sharedInlineText(entrySource) {
   const navDir = path.join(root, "src", "strategy", "navigation");
   const safetyDir = path.join(root, "src", "strategy", "safety");
   const combatDir = path.join(root, "src", "strategy", "combat");
+  const profilesDir = path.join(root, "src", "strategy", "profiles");
   const gameDir = path.join(root, "src", "game");
   const coreDir = path.join(root, "src", "core");
   const modules = [
@@ -151,6 +152,13 @@ export function sharedInlineText(entrySource) {
     path.join(coreDir, "state-machine.js"),
     path.join(coreDir, "scheduler.js")
   ];
+  // 双桌面构建才需要掠夺策略和卡住恢复；移动版不引用它们，避免无意义增肥。
+  if (String(entrySource || "").includes("__CRGR_PROFILE__")) {
+    modules.push(
+      path.join(profilesDir, "raider.js"),
+      path.join(coreDir, "runtime-watchdog.js")
+    );
+  }
   const entryNames = declaredNames(entrySource || "");
   const parts = [];
   parts.push("    // ---- src/shared + src/strategy + src/game + src/core 内联(Phase 2/3/4,单一真相源) ----");

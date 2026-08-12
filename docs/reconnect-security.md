@@ -38,8 +38,8 @@
 
 ## 清理与重试
 
-HUD 提供「清理重连」与「仅本次重试」：清理会清除 leave/ack/flow；仅本次重试按当前
-离开记录重建 leave 阶段流程，让看护当作一轮全新流程重试一次。
+紧凑 HUD 保留「仅本次重试」，按当前离开记录重建 leave 阶段流程。完整清理由控制台
+`window.__codexRatGoldRunner.clearReconnectState()` 执行，清除 leave/ack/flow，不再占用常驻按钮位。
 
 ## 游戏契约检查(fail closed,§4.5)
 

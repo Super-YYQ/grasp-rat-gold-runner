@@ -710,6 +710,9 @@
   function pageMain() {
     "use strict";
 
+    const BUILD_PROFILE = typeof __CRGR_PROFILE__ !== "undefined" ? __CRGR_PROFILE__ : "scavenger";
+    const IS_RAIDER_PROFILE = BUILD_PROFILE === "raider";
+    const PROFILE_TAG = IS_RAIDER_PROFILE ? "RAT RAIDER" : "RAT SCAVENGER";
     const RUNNER_KEY = "__codexRatGoldRunner";
     const PANEL_ID = "codex-rat-gold-runner-panel";
     const RICH_ENEMY_MIN_DROP = 10;
@@ -794,6 +797,13 @@
     const HUNT_PREDICT_MIN_MS = 350;
     const HUNT_PREDICT_MAX_MS = 1300;
     const HUNT_PREDICT_DISTANCE_DIVISOR = 9000;
+    const RAID_REPLAN_MS = 1800;
+    const RAID_LOOT_WAIT_MS = 1200;
+    const RAID_LOOT_HOLD_MS = 6000;
+    const RAID_LOOT_RADIUS_CM = 2800;
+    const WATCHDOG_STALL_MS = 4500;
+    const WATCHDOG_STALE_MS = 12000;
+    const WATCHDOG_FALLBACK_RELOAD_MS = 6000;
     const DANGER_ID = "codex-rat-danger-vignette";
     const MANUAL_TARGET_REACHED_CM = 160;
     const MOVE_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"];
@@ -851,12 +861,12 @@
         '  <div class="crgr-corner c3"></div>',
         '  <div class="crgr-corner c4"></div>',
         '  <div class="crgr-head">',
-        '    <span class="crgr-tag">RAT GOLD RUNNER</span>',
+        '    <span class="crgr-tag">' + PROFILE_TAG + '</span>',
         '    <strong data-crgr="mode">STANDBY</strong>',
         '    <button type="button" data-crgr="collapse" title="折叠/展开">HUD</button>',
         '  </div>',
-        '  <div class="crgr-attack-lock">',
-        '    <button type="button" class="crgr-auto-attack" data-crgr="auto-fire">自动攻击</button>',
+        '  <div class="crgr-attack-lock" hidden>',
+        '    <button type="button" class="crgr-auto-attack" data-crgr="auto-fire" hidden>自动攻击</button>',
         '    <div class="crgr-attack-head"><span>ATTACK BUFFER</span><small data-crgr="attack-lock-summary">AUTO</small></div>',
         '    <div class="crgr-attack-list" data-crgr="attack-list"><button type="button" disabled>扫描中</button></div>',
         '  </div>',
@@ -874,20 +884,20 @@
         '    <div class="crgr-line"><span>SAFETY</span><b data-crgr="safety">LEAVE 0 / EVADE 0</b></div>',
         '  </div>',
         '  <div class="crgr-body">',
-        '    <div class="crgr-hunt-row">',
+        '    <div class="crgr-hunt-row" hidden>',
         '      <label>追杀用户名 <input data-crgr="hunt-query" placeholder="用户名片段" /></label>',
         '      <button type="button" data-crgr="hunt">追杀</button>',
         '    </div>',
         '    <div class="crgr-drop-board">',
-        '      <div class="crgr-drop-head"><span>DROP TOP 5</span><small data-crgr="drop-refresh">--</small></div>',
+        '      <div class="crgr-drop-head"><span>' + (IS_RAIDER_PROFILE ? 'RAID TARGETS' : 'DROP RADAR') + '</span><small data-crgr="drop-refresh">--</small></div>',
         '      <ol data-crgr="drop-list"><li>扫描中</li></ol>',
         '    </div>',
         '    <div class="crgr-actions">',
         '      <button type="button" data-crgr="start">启动</button>',
         '      <button type="button" data-crgr="stop">停止</button>',
-        '      <button type="button" data-crgr="combat">临时交战</button>',
+        '      <button type="button" data-crgr="combat" hidden>临时交战</button>',
         '      <button type="button" data-crgr="reconnect">重连 ON</button>',
-        '      <button type="button" data-crgr="reconnect-clear" title="清理重连流程/离开记录/ack">清理重连</button>',
+        '      <button type="button" data-crgr="reconnect-clear" title="清理重连流程/离开记录/ack" hidden>清理重连</button>',
         '      <button type="button" data-crgr="reconnect-retry" title="清掉失败/终态后仅本次重试">仅本次重试</button>',
         '      <button type="button" data-crgr="leave">离开</button>',
         '    </div>',
@@ -919,6 +929,7 @@
             linear-gradient(180deg, rgba(14, 165, 233, .04), transparent 18%, transparent 82%, rgba(14, 165, 233, .03));
           box-shadow: inset 0 0 36px rgba(14, 165, 233, .045);
         }
+        #${PANEL_ID} [hidden] { display: none !important; }
         #${PANEL_ID} .crgr-lines {
           position: absolute;
           inset: 0;
@@ -1151,12 +1162,12 @@
           position: absolute;
           left: 18px;
           bottom: 86px;
-          width: min(520px, calc(100% - 36px));
+          width: min(460px, calc(100% - 36px));
           display: grid;
           grid-template-columns: 1fr;
-          gap: 8px;
+          gap: 6px;
           align-items: end;
-          padding: 8px;
+          padding: 6px;
           background: rgba(2, 6, 23, .42);
           border: 1px solid rgba(125, 211, 252, .14);
           pointer-events: auto;
@@ -1252,11 +1263,11 @@
         }
         #${PANEL_ID} .crgr-actions {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 6px;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 4px;
         }
         #${PANEL_ID} button {
-          min-height: 34px;
+          min-height: 30px;
           color: #eaf3ff;
           background: rgba(15, 23, 42, .2);
           border: 1px solid rgba(125, 211, 252, .22);
@@ -1425,6 +1436,7 @@
 
       const runner = {
         running: false,
+        profile: BUILD_PROFILE,
         // Phase 4:显式状态机(源码 src/core/state-machine.js,内联)。
         // 与 running/combatMode/huntMode/rejoinRecovery/leaveInProgress 保持同步。
         stateMachine: createStateMachine(RUNNER_STATES.STANDBY),
@@ -1456,6 +1468,22 @@
         coinBlacklist: new Map(),
         navTarget: null,
         planNextAt: 0,
+        runtimeWatchdog: createRuntimeWatchdog({
+          stallMs: WATCHDOG_STALL_MS,
+          staleMs: WATCHDOG_STALE_MS,
+          maxRecoveries: 2,
+          progressCm: 80
+        }),
+        watchdogStatus: "OK",
+        missingMeSince: 0,
+        connectionIssueSince: 0,
+        raidChoice: null,
+        raidPlanNextAt: 0,
+        raidTargetId: null,
+        raidTargetLast: null,
+        raidEngagementHp: null,
+        raidLootAnchor: null,
+        raidPhase: "idle",
         manualTarget: null,
         huntMode: false,
         huntQuery: "",
@@ -1694,6 +1722,9 @@
         if (runner.huntMode) {
           setHuntMode(false, "右键坐标接管");
         }
+        if (IS_RAIDER_PROFILE && runner.raidTargetId) {
+          resetRaidPursuit("右键坐标接管", false);
+        }
         runner.manualTarget = {
           x: Math.round(Number(x)),
           y: Math.round(Number(y)),
@@ -1748,6 +1779,11 @@
 
       function setHuntMode(active, reason) {
         const next = !!active;
+        if (next) {
+          runner.lastAction = "追杀按钮已由双构建策略替代：请使用掠夺版自动选敌";
+          renderStatus();
+          return;
+        }
         const query = huntQueryText();
         if (next && !query) {
           runner.lastAction = "追杀：请输入用户名片段";
@@ -1883,6 +1919,7 @@
             y,
             vxCmps,
             vyCmps,
+            firstSeenAt: last ? last.firstSeenAt : now,
             lastSeenAt: now,
             lastMovedAt: moved ? now : (last ? last.lastMovedAt : 0)
           });
@@ -2022,7 +2059,7 @@
             name.type = "button";
             name.className = "crgr-drop-name";
             name.textContent = row.name;
-            name.title = row.copyName ? "点击复制并填入追杀用户名" : "未识别到真实用户名";
+            name.title = row.copyName ? "点击复制用户名" : "未识别到真实用户名";
             if (row.copyName) name.dataset.copyName = row.copyName;
             else name.disabled = true;
             value.className = "crgr-drop-value";
@@ -2054,16 +2091,15 @@
         const button = event.target && event.target.closest ? event.target.closest(".crgr-drop-name") : null;
         if (!button || !ui.dropList || !ui.dropList.contains(button) || !button.dataset.copyName) return;
         const name = button.dataset.copyName;
-        fillHuntQueryFromLeaderboard(name);
         copyText(name)
           .then(() => {
-            runner.lastAction = "已复制并填入追杀用户名：" + name;
+            runner.lastAction = "已复制用户名：" + name;
             runner.lastError = "";
-            ui.dropRefresh.textContent = "已填入 " + formatClock(Date.now());
+            ui.dropRefresh.textContent = "已复制 " + formatClock(Date.now());
             renderStatus();
           })
           .catch(err => {
-            runner.lastAction = "已填入追杀用户名：" + name;
+            runner.lastAction = "用户名复制失败：" + name;
             runner.lastError = "复制用户名失败：" + String(err && err.message || err);
             renderStatus();
           });
@@ -3506,6 +3542,229 @@
         return true;
       }
 
+      function raidCandidateId(enemy) {
+        return idKey(enemy && (enemy.user_id ?? enemy.id));
+      }
+
+      function bestRaidKillOpportunity(me, now) {
+        if (!IS_RAIDER_PROFILE || runner.fireReady === false) return null;
+        const scored = liveEnemies(me, RAIDER_DEFAULTS.maxPursuitCm)
+          .map(decorateAttackEnemy)
+          .filter(Boolean)
+          .map(enemy => classifyRaidCandidate(
+            enemy,
+            runner.enemyMotion.get(raidCandidateId(enemy)),
+            me,
+            now
+          ))
+          .filter(enemy => enemy.eligible)
+          .map(enemy => scoreRaidCandidate(me, enemy))
+          .filter(Boolean)
+          .sort((a, b) => Number(b.score) - Number(a.score)
+            || Number(b.reward) - Number(a.reward)
+            || Number(a.target.dist) - Number(b.target.dist));
+        return scored[0] || null;
+      }
+
+      function resetRaidPursuit(reason, keepLoot) {
+        const previous = runner.raidTargetLast;
+        const hadTarget = !!runner.raidTargetId;
+        runner.autoFireMode = false;
+        runner.autoFireStatus = "OFF";
+        runner.autoFireTarget = "";
+        clearAutoFireBurst(true);
+        clearAttackLock(reason || "掠夺目标结束");
+        runner.raidTargetId = null;
+        runner.raidTargetLast = null;
+        runner.raidEngagementHp = null;
+        runner.raidPhase = keepLoot ? "loot-wait" : "idle";
+        if (keepLoot && previous && Number.isFinite(previous.x) && Number.isFinite(previous.y)) {
+          runner.raidLootAnchor = { ...previous, createdAt: Date.now() };
+        } else if (!keepLoot) {
+          runner.raidLootAnchor = null;
+        }
+        setStepInterval(STEP_TICK_MS);
+        syncStateMachine();
+        if (hadTarget && reason) push("掠夺目标结束：" + reason);
+      }
+
+      function planRaiderOpportunity(me, threats, now) {
+        if (!IS_RAIDER_PROFILE || runner.manualTarget) return runner.raidChoice;
+        now = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+        if (now < runner.raidPlanNextAt && runner.raidChoice) return runner.raidChoice;
+
+        const planned = bestDropRoute(me, threats);
+        const coin = planned && planned.target
+          ? {
+              kind: "coin",
+              id: idKey(planned.target.drop_id),
+              score: Number(planned.score) || 0,
+              route: planned
+            }
+          : null;
+        const kill = bestRaidKillOpportunity(me, now);
+        const choice = chooseProfileOpportunity(coin, kill, runner.raidChoice, now);
+        runner.raidPlanNextAt = now + RAID_REPLAN_MS;
+
+        if (!choice) {
+          if (runner.raidTargetId) resetRaidPursuit("没有合格目标", false);
+          runner.raidChoice = null;
+          return null;
+        }
+
+        if (choice.kind === "kill") {
+          const changed = idKey(choice.id) !== idKey(runner.raidTargetId);
+          if (changed && runner.raidTargetId) resetRaidPursuit("切换到更高收益目标", false);
+          runner.raidChoice = choice;
+          runner.raidTargetId = idKey(choice.id);
+          runner.raidPhase = "pursuit";
+          clearCoinRoute();
+          if (changed) {
+            runner.raidEngagementHp = Number(me.hp);
+            setAttackLock(choice.target, choice.target.kind === "afk" ? "静止目标" : "优势收割");
+            push("掠夺机会：" + (choice.target.displayName || ("#" + choice.id))
+              + " / " + choice.target.kind
+              + " / Drop " + Math.round(choice.reward)
+              + " / 评分 " + choice.score.toFixed(3));
+          }
+          syncStateMachine();
+          return runner.raidChoice;
+        }
+
+        if (runner.raidTargetId) resetRaidPursuit("金币路线收益更高", false);
+        runner.raidChoice = choice;
+        if (choice.route) adoptCoinRoute(choice.route);
+        runner.raidPhase = "scavenge";
+        return runner.raidChoice;
+      }
+
+      function handleRaidLoot(me) {
+        const anchor = runner.raidLootAnchor;
+        if (!IS_RAIDER_PROFILE || !anchor) return false;
+        const now = Date.now();
+        const candidates = (state.coinDrops || [])
+          .map(drop => ({
+            ...drop,
+            distToAnchor: Math.hypot(Number(drop.x) - anchor.x, Number(drop.y) - anchor.y),
+            distToMe: Math.hypot(Number(drop.x) - Number(me.x), Number(drop.y) - Number(me.y)),
+            amountValue: readDropAmount(drop)
+          }))
+          .filter(drop => Number.isFinite(drop.distToAnchor)
+            && drop.distToAnchor <= RAID_LOOT_RADIUS_CM
+            && drop.amountValue !== null)
+          .sort((a, b) => Number(b.amountValue) - Number(a.amountValue) || a.distToMe - b.distToMe);
+        const loot = candidates[0];
+        if (loot) {
+          runner.raidLootAnchor = null;
+          runner.raidChoice = {
+            kind: "coin",
+            id: idKey(loot.drop_id),
+            score: Number(loot.amountValue) / (loot.distToMe / 1000 + 0.75),
+            adoptedAt: now
+          };
+          adoptCoinRoute({
+            target: loot,
+            ids: [loot.drop_id],
+            score: runner.raidChoice.score,
+            value: Number(loot.amountValue),
+            travelSeconds: loot.distToMe / 1000,
+            kind: "raid-loot"
+          });
+          runner.raidPhase = "loot";
+          push("发现击杀掉落 #" + loot.drop_id + "，优先回收 " + Math.round(loot.amountValue));
+          return false;
+        }
+        const elapsed = now - Number(anchor.createdAt || now);
+        if (elapsed < RAID_LOOT_WAIT_MS) {
+          stopMove();
+          runner.raidPhase = "loot-wait";
+          runner.lastAction = "等待击杀掉落 " + Math.ceil((RAID_LOOT_WAIT_MS - elapsed) / 100) / 10 + "s";
+          return true;
+        }
+        if (elapsed >= RAID_LOOT_HOLD_MS) runner.raidLootAnchor = null;
+        return false;
+      }
+
+      function driveRaiderOpportunity(me) {
+        if (!IS_RAIDER_PROFILE || !runner.raidChoice || runner.raidChoice.kind !== "kill" || !runner.raidTargetId) {
+          return false;
+        }
+        const now = Date.now();
+        const fresh = visibleAttackTargetById(me, runner.raidTargetId);
+        if (!fresh) {
+          resetRaidPursuit("目标消失，检查掉落", true);
+          runner.raidChoice = null;
+          runner.raidPlanNextAt = now + RAID_LOOT_WAIT_MS;
+          return handleRaidLoot(me);
+        }
+
+        const target = classifyRaidCandidate(
+          fresh,
+          runner.enemyMotion.get(raidCandidateId(fresh)),
+          me,
+          now
+        );
+        runner.raidTargetLast = {
+          id: raidCandidateId(target),
+          name: target.displayName || ("#" + raidCandidateId(target)),
+          x: Number(target.x),
+          y: Number(target.y),
+          hp: Number(target.hpForFire),
+          dist: Number(target.dist),
+          seenAt: now
+        };
+
+        if (!target.eligible) {
+          resetRaidPursuit("目标转为高风险：" + target.reason, false);
+          runner.raidChoice = null;
+          runner.raidPlanNextAt = 0;
+          return false;
+        }
+        const abort = raidShouldAbort(me, target, runner.raidEngagementHp);
+        if (abort.abort) {
+          setDanger(true, abort.reason === "critical-hp" ? "critical" : undefined);
+          clickLeave("掠夺止损：" + abort.reason, { recovery: true, fallbackReloadMs: WATCHDOG_FALLBACK_RELOAD_MS });
+          return true;
+        }
+
+        if (idKey(runner.attackLockUserId) !== idKey(runner.raidTargetId)) {
+          setAttackLock(target, "恢复掠夺锁定");
+        }
+        if (Number(target.dist) > RAIDER_DEFAULTS.holdRangeCm) {
+          runner.autoFireMode = false;
+          runner.autoFireStatus = "追近";
+          clearAutoFireBurst(true);
+          setStepInterval(STEP_TICK_MS);
+          const velocity = entityVelocityCmps(target, target.user_id);
+          const leadSeconds = Math.min(0.65, Math.max(0.18, Number(target.dist) / 50000));
+          const tx = Number(target.x) + velocity.vx * leadSeconds;
+          const ty = Number(target.y) + velocity.vy * leadSeconds;
+          moveToward(tx - Number(me.x), ty - Number(me.y));
+          setNavigationTarget(tx, ty, "raid");
+          runner.raidPhase = "pursuit";
+          runner.lastAction = "掠夺追近 " + runner.raidTargetLast.name
+            + " / " + Math.round(Number(target.dist) / 100) + "m"
+            + " / Drop " + Math.round(target.dropForAvoid);
+          return true;
+        }
+
+        runner.autoFireMode = runner.fireReady !== false;
+        runner.raidPhase = "fire";
+        setStepInterval(runner.autoFireMode ? AUTO_FIRE_LOOP_MS : STEP_TICK_MS);
+        if (target.kind === "afk" && Number(target.dist) <= RAIDER_DEFAULTS.holdRangeCm) {
+          stopMove();
+          runner.lastMoveMode = "raid-hold";
+        } else {
+          applyCombatDodge(me, [target]);
+        }
+        if (runner.autoFireMode) handleAutoFire(me);
+        runner.lastAction = "掠夺开火 " + runner.raidTargetLast.name
+          + " / HP " + Math.round(target.hpForFire)
+          + " / Drop " + Math.round(target.dropForAvoid)
+          + " / " + runner.autoFireStatus;
+        return true;
+      }
+
       function canvasRect() {
         const worldCanvas = typeof canvas !== "undefined" ? canvas : document.getElementById("world");
         if (worldCanvas && typeof worldCanvas.getBoundingClientRect === "function") {
@@ -3832,15 +4091,24 @@
           const bridge = (typeof window !== "undefined" && window.__crgrReconnect) || null;
           if (!bridge || typeof bridge.writeLeave !== "function") return;
           const noReconnect = !!(options && options.noReconnect);
+          const recovery = !!(options && options.recovery);
+          const previous = typeof bridge.readLeave === "function" ? bridge.readLeave() : null;
           // Phase 6:类型分类统一委托给 LeavePolicy.classifyLeave(纯逻辑,可测试)。
-          const type = classifyLeave(reason, me ? Number(me.hp || 0) : NaN, noReconnect, COMBAT_CRITICAL_HP);
+          // watchdog/运行恢复复用 damage 的即时重连通道，但额外记录并限制恢复次数。
+          const type = recovery
+            ? "damage"
+            : classifyLeave(reason, me ? Number(me.hp || 0) : NaN, noReconnect, COMBAT_CRITICAL_HP);
           const enabled = !noReconnect && runner.autoReconnect !== false;
+          const previousRecovery = previous && previous.recovery === true
+            && Date.now() - Number(previous.ts || 0) <= 10 * 60 * 1000;
           const rec = {
             ts: Date.now(),
             type,
             hp: me ? Number(me.hp || 0) : null,
             reason: String(reason || ""),
             enabled,
+            recovery,
+            recoveryAttempt: recovery ? (previousRecovery ? Number(previous.recoveryAttempt || 0) + 1 : 1) : 0,
             v: 2
           };
           bridge.writeLeave(rec);
@@ -3883,6 +4151,24 @@
         } catch (_) {}
       }
 
+      function scheduleFallbackReload(leaveRecord, delayMs, requirePlayerEntity) {
+        const delay = Number(delayMs);
+        if (!Number.isFinite(delay) || delay <= 0 || !leaveRecord
+          || leaveRecord.recovery !== true || leaveRecord.enabled === false) return false;
+        if (Number(leaveRecord.recoveryAttempt || 0) > 2) {
+          runner.lastError = "运行恢复已达 2 次上限，停止自动刷新";
+          push(runner.lastError);
+          return false;
+        }
+        window.setTimeout(() => {
+          if (!runner.leaveInProgress || location.hostname !== "grasp-rat-game.h-e.top") return;
+          if (requirePlayerEntity && !getMe()) return;
+          runner.lastAction = "离开未完成跳转，执行限次刷新恢复";
+          try { location.reload(); } catch (_) {}
+        }, delay);
+        return true;
+      }
+
       function clickLeave(reason, options) {
         if (runner.leaveInProgress) return false;
         const noReconnect = !!(options && options.noReconnect) || runner.rejoinRecovery;
@@ -3908,19 +4194,34 @@
         syncStateMachine();
         const me = getMe();
         runner.stoppedHpBaseline = me ? Number(me.hp || 0) : null;
+        // 先写恢复记录；即使网络异常时离开按钮已从 DOM 消失，也能走限次刷新。
+        const leaveRecord = recordLeave(reason, me, {
+          noReconnect,
+          recovery: !!(options && options.recovery)
+        });
         if (!button) {
-          clearReconnectState();
           runner.lastError = "leave button not found";
-          push("离开失败：" + runner.lastError + "（已停止自动重连）");
+          const scheduled = scheduleFallbackReload(
+            leaveRecord,
+            options && options.fallbackReloadMs,
+            false
+          );
+          if (!scheduled) clearReconnectState();
+          push("离开失败：" + runner.lastError + (scheduled ? "（等待限次刷新）" : "（已停止自动重连）"));
           renderStatus();
-          return false;
+          return scheduled;
         }
-        // 写离开记录供授权页(另一个域名)读、按类型算冷却决定是否自动重连
-        recordLeave(reason, me, { noReconnect });
         clearAutoFireBurst(true);
         clearAttackLock("离开脱战");
         clearHuntTarget();
         clearCoinRoute();
+        runner.raidChoice = null;
+        runner.raidTargetId = null;
+        runner.raidTargetLast = null;
+        runner.raidEngagementHp = null;
+        runner.raidLootAnchor = null;
+        runner.raidPhase = "idle";
+        runner.runtimeWatchdog.reset(Date.now());
         runner.fleeAnchor = null;
         runner.cruiseDodgeUntil = 0;
         runner.combatRisk = "clear";
@@ -3932,6 +4233,7 @@
         try {
           button.click();
           push("已点击离开脱战：" + reason);
+          scheduleFallbackReload(leaveRecord, options && options.fallbackReloadMs, true);
         } catch (err) {
           clearReconnectState();
           runner.lastError = String(err && err.message || err);
@@ -3979,16 +4281,21 @@
           const leave = typeof bridge.readLeave === "function" ? bridge.readLeave() : null;
           const flow = typeof bridge.readFlow === "function" ? bridge.readFlow() : null;
           const active = typeof bridge.isRecordActive === "function" ? bridge.isRecordActive(leave) : true;
-          if (!ack || !leave || !leave.ts || String(ack) !== String(leave.ts)
-            || !active || leave.enabled === false
-            || !flow || String(flow.ts) !== String(leave.ts)) return;
+          const fallbackRecovery = !!(leave && leave.recovery === true
+            && Number(leave.recoveryAttempt || 0) <= 2
+            && active && leave.enabled !== false);
+          const oauthRecovery = !!(ack && leave && leave.ts && String(ack) === String(leave.ts)
+            && active && leave.enabled !== false
+            && flow && String(flow.ts) === String(leave.ts));
+          if (!fallbackRecovery && !oauthRecovery) return;
           // 命中:刚自动重连回来。lowhp 离开的格外危险,用更大发车范围 + 不自动启动。
           runner.rejoinRecovery = true;
           runner.rejoinLeaveType = leave.type || "damage";
           runner.rejoinSafeSince = 0;
           runner.rejoinPeakHp = null;
           syncStateMachine();
-          push("检测到自动重连回游戏,进入安全恢复态(type=" + runner.rejoinLeaveType + ")…");
+          push((fallbackRecovery ? "检测到看门狗刷新恢复" : "检测到自动重连回游戏")
+            + ",进入安全恢复态(type=" + runner.rejoinLeaveType + ")…");
           // 不自动恢复运行:停留 !running,由 monitorRejoinRecovery 看护
         } catch (_) {}
       }
@@ -4061,6 +4368,13 @@
 
       function setAutoFireMode(active, reason) {
         const next = !!active;
+        if (next) {
+          runner.lastAction = IS_RAIDER_PROFILE
+            ? "开火由掠夺闭环自动控制"
+            : "拾荒版不主动攻击";
+          renderStatus();
+          return;
+        }
         if (runner.autoFireMode === next) return;
         runner.autoFireMode = next;
         runner.autoFireLastAt = 0;
@@ -4085,6 +4399,11 @@
 
       function setCombatMode(active, reason) {
         const next = !!active;
+        if (next) {
+          runner.lastAction = "临时交战按钮已由掠夺版策略替代";
+          renderStatus();
+          return;
+        }
         if (runner.combatMode === next) return;
         const clearedManualTarget = next && reason === "manual" && !!runner.manualTarget;
         if (clearedManualTarget) {
@@ -4255,16 +4574,106 @@
         return true;
       }
 
+      function runtimeWatchdogTargetKey() {
+        if (runner.raidTargetId) return "raid:" + idKey(runner.raidTargetId);
+        if (runner.manualTarget) return "manual:" + runner.manualTarget.x + "," + runner.manualTarget.y;
+        if (runner.targetId) return "coin:" + idKey(runner.targetId);
+        if (runner.fleeing && runner.fleeKey) return "evade:" + runner.fleeKey;
+        const nav = runner.navTarget;
+        if (!nav) return "idle";
+        return String(nav.type || "nav") + ":"
+          + Math.round(Number(nav.x || 0) / 500) + "," + Math.round(Number(nav.y || 0) / 500);
+      }
+
+      function runtimeStatePulse(me) {
+        const tick = numberFrom(state, ["server_tick", "serverTick", "tick", "current_tick", "currentTick"], NaN);
+        if (Number.isFinite(tick)) return "tick:" + tick;
+        // 没有可信服务器 tick 时留空，避免在地图真正静止时把本地快照误判为断线。
+        return "";
+      }
+
+      function visibleConnectionIssue() {
+        try {
+          if (typeof navigator !== "undefined" && navigator.onLine === false) return "browser-offline";
+          const nodes = document.querySelectorAll(
+            '[role="alert"], [role="status"], .toast, .notification, .modal, .ant-message, .ant-notification'
+          );
+          const pattern = /(disconnected|connection\s+(lost|failed)|network\s+error|连接(已)?断开|网络(异常|错误|已断开)|重新连接)/i;
+          for (const node of nodes) {
+            const value = String(node && node.textContent || "").trim();
+            if (value && pattern.test(value)) return value.slice(0, 80);
+          }
+        } catch (_) {}
+        return "";
+      }
+
+      function handleConnectionIssueWatchdog() {
+        const issue = visibleConnectionIssue();
+        if (!issue) {
+          runner.connectionIssueSince = 0;
+          return false;
+        }
+        if (!runner.connectionIssueSince) runner.connectionIssueSince = Date.now();
+        runner.watchdogStatus = "NETWORK " + issue;
+        if (Date.now() - runner.connectionIssueSince < 3000) return false;
+        clickLeave("运行看门狗：网络异常 " + issue, {
+          recovery: true,
+          fallbackReloadMs: WATCHDOG_FALLBACK_RELOAD_MS
+        });
+        return true;
+      }
+
+      function handleRuntimeWatchdog(me) {
+        const result = runner.runtimeWatchdog.observe({
+          now: Date.now(),
+          active: runner.running && !runner.leaveInProgress,
+          expectedMove: runner.scriptMoveKeys.size > 0,
+          x: Number(me.x),
+          y: Number(me.y),
+          targetKey: runtimeWatchdogTargetKey(),
+          pulse: runtimeStatePulse(me)
+        });
+        if (result.action === "replan") {
+          runner.watchdogStatus = "REPLAN " + result.recoveries;
+          runner.planNextAt = 0;
+          runner.raidPlanNextAt = 0;
+          runner.coinArrivalAt = 0;
+          runner.coinArrivalNudges = 0;
+          push("运行看门狗：移动无进展，触发重规划");
+          return false;
+        }
+        if (result.action === "leave") {
+          runner.watchdogStatus = "RECOVER " + result.reason;
+          clickLeave("运行看门狗：" + result.reason, {
+            recovery: true,
+            fallbackReloadMs: WATCHDOG_FALLBACK_RELOAD_MS
+          });
+          return true;
+        }
+        runner.watchdogStatus = result.recoveries > 0 ? ("WATCH " + result.recoveries) : "OK";
+        return false;
+      }
+
       function step() {
         try {
           if (checkHourlyStaminaLimitLeave()) return;
+          if (handleConnectionIssueWatchdog()) return;
 
           const me = getMe();
           if (!me) {
             stopMove();
             runner.lastAction = "等待玩家实体";
+            if (!runner.missingMeSince) runner.missingMeSince = Date.now();
+            if (Date.now() - runner.missingMeSince >= WATCHDOG_STALE_MS) {
+              runner.watchdogStatus = "RECOVER missing-player";
+              clickLeave("运行看门狗：玩家实体持续缺失", {
+                recovery: true,
+                fallbackReloadMs: WATCHDOG_FALLBACK_RELOAD_MS
+              });
+            }
             return;
           }
+          runner.missingMeSince = 0;
 
           const hp = Number(me.hp || 0);
           const balance = Number(me.external_balance_snapshot || 0);
@@ -4278,7 +4687,8 @@
           }
           runner.lastBalance = balance;
 
-          if (hp < runner.lastHp && !runner.combatMode) {
+          const raidEngaged = IS_RAIDER_PROFILE && !!runner.raidTargetId;
+          if (hp < runner.lastHp && !runner.combatMode && !raidEngaged) {
             setDanger(false);
             clickLeave("常态血量下降 " + runner.lastHp + " -> " + hp);
             runner.lastHp = hp;
@@ -4311,25 +4721,37 @@
 
           trackEnemyMotion(Date.now());
 
-          if (handleCombatMode(me, hp)) return;
-
-          if (runner.autoFireMode) {
-            if (runner.fireReady !== false) {
-              setStepInterval(AUTO_FIRE_LOOP_MS);
-              handleAutoFire(me);
-            } else {
-              runner.autoFireStatus = "页面契约不满足·自动攻击不可用";
-              setStepInterval(STEP_TICK_MS);
-            }
-          } else {
-            setStepInterval(STEP_TICK_MS);
-          }
-
-          if (driveHuntTarget(me)) return;
+          if (handleRuntimeWatchdog(me)) return;
 
           const threats = richEnemies(me, RICH_ENEMY_SCAN_CM);
-          const urgentThreat = escapeEnemies(me, RICH_ENEMY_ESCAPE_CM)[0];
+          if (!IS_RAIDER_PROFILE) {
+            if (handleCombatMode(me, hp)) return;
+            if (runner.autoFireMode) {
+              if (runner.fireReady !== false) {
+                setStepInterval(AUTO_FIRE_LOOP_MS);
+                handleAutoFire(me);
+              } else {
+                runner.autoFireStatus = "页面契约不满足·自动攻击不可用";
+                setStepInterval(STEP_TICK_MS);
+              }
+            } else {
+              setStepInterval(STEP_TICK_MS);
+            }
+            if (driveHuntTarget(me)) return;
+          }
+
+          if (IS_RAIDER_PROFILE && !runner.manualTarget) {
+            planRaiderOpportunity(me, threats, Date.now());
+          }
+          const protectedRaidId = IS_RAIDER_PROFILE ? idKey(runner.raidTargetId) : "";
+          const urgentThreat = escapeEnemies(me, RICH_ENEMY_ESCAPE_CM)
+            .find(enemy => !protectedRaidId || idKey(enemy.user_id) !== protectedRaidId);
           if (urgentThreat) {
+            if (runner.raidTargetId) {
+              resetRaidPursuit("第三方近身威胁优先", false);
+              runner.raidChoice = null;
+              runner.raidPlanNextAt = 0;
+            }
             const reason = urgentThreat.dropForAvoid > RICH_ENEMY_MIN_DROP
               ? "高Drop敌人进入170m射程缓冲，立即逃离"
               : "低Drop移动敌人进入170m射程缓冲，立即逃离";
@@ -4338,8 +4760,14 @@
           }
           setDanger(false);
 
-          const keepawayThreat = threats.find(enemy => enemy.dist < RICH_ENEMY_KEEP_CM);
+          const keepawayThreat = threats.find(enemy => enemy.dist < RICH_ENEMY_KEEP_CM
+            && (!protectedRaidId || idKey(enemy.user_id) !== protectedRaidId));
           if (keepawayThreat) {
+            if (runner.raidTargetId) {
+              resetRaidPursuit("第三方威胁进入警戒范围", false);
+              runner.raidChoice = null;
+              runner.raidPlanNextAt = 0;
+            }
             fleeFrom(keepawayThreat, me, "富敌过近，拉开到200-250m外", false);
             return;
           }
@@ -4348,9 +4776,14 @@
           runner.fleeing = false;
           runner.fleeKey = "";
 
-          if (handleCruiseProjectileDodge(me)) return;
-
           if (driveManualTarget(me, "前往")) return;
+
+          if (IS_RAIDER_PROFILE) {
+            if (handleRaidLoot(me)) return;
+            if (driveRaiderOpportunity(me)) return;
+          }
+
+          if (handleCruiseProjectileDodge(me)) return;
 
           let target = currentCoinRouteTarget(me, threats);
 
@@ -4429,8 +4862,8 @@
         }
       }
 
-      // Phase 4:把 runner 的隐式模式同步到显式状态机(不改变现有控制流)。
-      // 优先级:LEAVING > REJOIN > COMBAT > HUNT > CRUISE > STOPPED > STANDBY。
+      // Phase 4:把 runner 的隐式模式同步到显式状态机。
+      // 优先级:LEAVING > REJOIN > COMBAT > HUNT > RAID > CRUISE > STOPPED > STANDBY。
       function syncStateMachine() {
         const sm = runner.stateMachine;
         if (runner.leaveInProgress) { sm.transition(RUNNER_STATES.LEAVING, "leave"); return; }
@@ -4438,6 +4871,10 @@
         if (!runner.running) { sm.transition(RUNNER_STATES.STOPPED, runner.startedAt ? "stop" : "standby"); return; }
         if (runner.combatMode) { sm.transition(RUNNER_STATES.COMBAT, "combat"); return; }
         if (runner.huntMode) { sm.transition(RUNNER_STATES.HUNT, "hunt"); return; }
+        if (IS_RAIDER_PROFILE && (runner.raidTargetId || runner.raidLootAnchor)) {
+          sm.transition(RUNNER_STATES.RAID, runner.raidPhase || "raid");
+          return;
+        }
         sm.transition(RUNNER_STATES.CRUISE, "cruise");
       }
 
@@ -4456,12 +4893,28 @@
         runner.stoppedHpBaseline = runner.lastHp;
         runner.lastBalance = me ? Number(me.external_balance_snapshot || 0) : null;
         runner.hourlyLimitLeaveTriggered = false;
+        runner.combatMode = false;
+        runner.huntMode = false;
+        runner.autoFireMode = false;
+        runner.autoFireStatus = "OFF";
+        runner.autoFireTarget = "";
+        runner.raidChoice = null;
+        runner.raidTargetId = null;
+        runner.raidTargetLast = null;
+        runner.raidEngagementHp = null;
+        runner.raidLootAnchor = null;
+        runner.raidPhase = "idle";
+        runner.raidPlanNextAt = 0;
+        runner.missingMeSince = 0;
+        runner.connectionIssueSince = 0;
+        runner.watchdogStatus = "OK";
+        runner.runtimeWatchdog.reset(Date.now());
         clearCoinRoute();
         runner.planNextAt = 0;
         runner.tickMs = STEP_TICK_MS;
         runner.timer = window.setInterval(step, runner.tickMs);
         syncStateMachine();
-        push("已启动");
+        push("已启动：" + (IS_RAIDER_PROFILE ? "杀敌掠夺" : "游走拾荒"));
         step();
         renderStatus();
       }
@@ -4480,6 +4933,17 @@
         runner.autoFireTarget = "";
         clearAutoFireBurst(true);
         clearAttackLock("停止脚本");
+        runner.raidChoice = null;
+        runner.raidTargetId = null;
+        runner.raidTargetLast = null;
+        runner.raidEngagementHp = null;
+        runner.raidLootAnchor = null;
+        runner.raidPhase = "idle";
+        runner.raidPlanNextAt = 0;
+        runner.missingMeSince = 0;
+        runner.connectionIssueSince = 0;
+        runner.watchdogStatus = "OK";
+        runner.runtimeWatchdog.reset(Date.now());
         runner.projectileMotion.clear();
         runner.fleeAnchor = null;
         runner.cruiseDodgeUntil = 0;
@@ -4527,7 +4991,11 @@
         const huntLabel = runner.huntMode
           ? ("HUNT " + (runner.huntTargetName || (runner.huntLastSeen && runner.huntLastSeen.name) || runner.huntQuery || "-"))
           : "";
+        const raidLabel = runner.raidTargetId
+          ? ((runner.raidTargetLast && runner.raidTargetLast.name) || runner.attackLockName || ("#" + runner.raidTargetId))
+          : "";
         return {
+          profile: runner.profile,
           running: runner.running,
           combatMode: runner.combatMode,
           huntMode: runner.huntMode,
@@ -4553,7 +5021,14 @@
           delta: runner.deltaBalance,
           leaves: runner.leaves,
           avoidances: runner.avoidances,
-          target: huntLabel || (manual ? (manual.x + "," + manual.y) : runner.targetId),
+          target: raidLabel || huntLabel || (manual ? (manual.x + "," + manual.y) : runner.targetId),
+          raidTarget: raidLabel,
+          raidPhase: runner.raidPhase,
+          raidChoiceKind: runner.raidChoice && runner.raidChoice.kind || "",
+          raidScore: runner.raidChoice && Number.isFinite(Number(runner.raidChoice.score))
+            ? Number(runner.raidChoice.score).toFixed(3)
+            : "-",
+          watchdogStatus: runner.watchdogStatus,
           nearest: drop ? Math.round(drop.dist) : "-",
           targetScore: runner.targetScore ? runner.targetScore.toFixed(3) : "-",
           routeCount: runner.routeIds ? runner.routeIds.length : 0,
@@ -4577,39 +5052,38 @@
       function renderStatus() {
         monitorStoppedDamage();
         monitorRejoinRecovery();
+        syncStateMachine();
         const s = snapshot();
         scheduleEntryDropLeaderboardRefresh();
-        renderAttackLockList(getMe());
         root.classList.toggle("running", !!s.running);
         ui.mode.textContent = runner.rejoinRecovery
           ? ("REJOIN " + (runner.rejoinLeaveType || "").toUpperCase())
-          : (s.combatMode ? "COMBAT" : s.huntMode ? "HUNT" : (s.running ? "ACTIVE" : "STANDBY"));
+          : !s.running
+          ? "STANDBY"
+          : IS_RAIDER_PROFILE
+          ? (s.raidTarget ? "RAID" : s.raidPhase === "loot" || s.raidPhase === "loot-wait" ? "LOOT" : "SCAVENGE")
+          : "SCAVENGE";
         ui.action.textContent = s.error ? ("ERROR: " + s.error) : (s.action || "等待指令");
         ui.hp.textContent = s.hp ? String(s.hp) : "--";
         ui.gain.textContent = "+" + (s.delta || 0);
-        ui.target.textContent = s.combatMode ? "COMBAT" : s.huntMode ? ("HUNT " + (s.huntTargetName || s.huntQuery || "-")) : (s.target ? String(s.target) : "--");
+        ui.target.textContent = s.target ? String(s.target) : "--";
         ui.move.textContent = s.moveMode || "idle";
-        ui.threat.textContent = s.combatMode
-          ? ((s.combatManualOverride ? "手动 / " : "") + "弹体 " + s.combatProjectiles + " / 标记 " + s.combatTargets + " / " + s.combatRisk)
+        ui.threat.textContent = s.raidTarget
+          ? ("掠夺 " + s.raidTarget + " / " + s.autoFireStatus)
           : s.threat
           ? (s.threat.name + " / " + s.threat.dist + "cm / Drop " + s.threat.drop)
-          : s.autoFireMode
-          ? ("射击 " + (s.autoFireTarget || "-") + " / " + s.autoFireStatus)
           : "clear";
         ui.stamina.textContent = "5s " + (s.stamina5s ?? "--") + " / 1h " + (s.stamina1h ?? "--");
-        ui.safety.textContent = "LEAVE " + s.leaves + " / EVADE " + s.avoidances;
-        ui.status.textContent = s.combatMode
-          ? ("COMBAT / " + (s.combatManualOverride ? "MANUAL / " : "") + "BULLETS " + s.combatProjectiles + " / TARGETS " + s.combatTargets
-            + (s.autoFireMode ? " / FIRE " + s.autoFireStatus : ""))
-          : s.huntMode
-          ? ("HUNT / QUERY " + (s.huntQuery || "-") + " / TARGET " + (s.huntTargetName || "-")
-            + (s.autoFireMode ? " / FIRE " + s.autoFireStatus : ""))
-          : "BAL " + (s.balance ?? "--")
+        ui.safety.textContent = "LEAVE " + s.leaves + " / EVADE " + s.avoidances + " / WD " + s.watchdogStatus;
+        ui.status.textContent = (IS_RAIDER_PROFILE ? "RAIDER" : "SCAVENGER")
+            + " / " + (IS_RAIDER_PROFILE ? (s.raidPhase || "idle") : "evade-loot")
+            + " / BAL " + (s.balance ?? "--")
             + " / VALUE " + (s.value ?? "--")
             + " / NEAREST " + s.nearest
             + " / ROUTE " + (s.routeKind || "single") + ":" + (s.routeCount || 0)
-            + " / SCORE " + s.targetScore
-            + (s.autoFireMode ? " / FIRE " + s.autoFireStatus : "");
+            + " / SCORE " + (IS_RAIDER_PROFILE ? s.raidScore : s.targetScore)
+            + (s.autoFireMode ? " / FIRE " + s.autoFireStatus : "")
+            + " / WD " + s.watchdogStatus;
         if (runner.contractStatus && runner.contractStatus !== "READY") {
           ui.status.textContent += " / 契约 " + runner.contractStatus
             + (runner.contractReason ? ":" + runner.contractReason : "");
@@ -4667,6 +5141,11 @@
       runner.clearManualTarget = clearManualTarget;
       runner.status = snapshot;
       runner.exportDiagnostics = exportContractDiagnostics;
+      runner.clearReconnectState = () => {
+        clearReconnectState();
+        push("已清理重连状态");
+        renderStatus();
+      };
 
       window.addEventListener("contextmenu", handleContextMenu, true);
       window.addEventListener("keydown", handleMovementKeyDown, true);

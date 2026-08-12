@@ -2,11 +2,12 @@
 
 给 Grasp Rat Game 写的篡改猴 userscript（用户脚本）。
 
-不止会呆呆吃金币，还可以当高达开！
+PC 端从 2.0.0 起拆成两个互斥脚本：
 
-想挂机？自动巡航吃金币！  怕挨打？敌人靠近自动跑！
+- **游走拾荒版**：躲避危险玩家，规划安全金币短路线，适合低风险挂机。
+- **杀敌掠夺版**：在金币路线和可控击杀之间统一比较收益，追击静止/明显劣势目标，击杀后优先捡掉落。
 
-快似了？濒死自动当逃兵！  想猛攻？交战模式自动闪避+火控自瞄！（自瞄目前还不好用Orz）
+两个脚本共享安全路线、弹道躲避、断线重连与卡住恢复，但不会再把“追杀 / 临时交战 / 自动攻击”三个开关叠在一起。
 
 游戏入口：`https://grasp-rat-game.h-e.top/`
 
@@ -17,17 +18,19 @@
 
 搭配 Tampermonkey（篡改猴）使用：`https://www.tampermonkey.net/`
 
-PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-gold-runner.user.js)。
+PC 游走拾荒版位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-gold-runner.user.js)。
+
+PC 杀敌掠夺版位于[dist/grasp-rat-raider-runner.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-raider-runner.user.js)。
 
 手机端脚本位于[dist/grasp-rat-gold-runner-mobile.user.js](https://github.com/Super-YYQ/grasp-rat-gold-runner/blob/optimize/dist/grasp-rat-gold-runner-mobile.user.js)。
 
-> 注意：当前稳定版本发布在 `optimize` 分支（PC `1.9.13` / Mobile `0.1.7`）。`main` 上的脚本已过期，请勿从 `main` 安装。重构完成并正式合入 `main` 后，本链接会改回 `main`。
+> 两个 PC 脚本只能启用一个；同时启用会争抢同一组移动与鼠标控制。当前稳定版本发布在 `optimize` 分支（PC `2.0.0` / Mobile `0.1.7`）。
 
 ------
 
 ## 核心功能玩法（一定要看哦）
 
-### 1. 自动挂机吃金币
+### 1. 游走拾荒版
 
 脚本会持续扫描金币，并自动规划一小段效率最高的顺路路线。
 
@@ -39,7 +42,20 @@ PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-
 - 路线附近有没有高 Drop 敌人。
 - 当前目标是否还值得继续追。
 
-### 2. 危险规避
+### 2. 杀敌掠夺版
+
+掠夺版不是见人就打，而是把地面金币路线和击杀机会放进同一个“单位时间收益”评分池：
+
+- 静止至少约 8 秒且有 Drop 的玩家可作为挂机目标。
+- 活跃玩家只有在自身血量、目标血量和 Drop 明显占优时才会进入收割候选。
+- 当前机会若没有被新机会高出约 15%，不会频繁换目标。
+- 追到 140m 左右进入火控距离；目标移动时短时预判，开火时继续躲弹/调距。
+- 自身 HP 低于安全线、累计受伤过多、体力储备不足或目标优势反转时立即止损离开。
+- 目标消失后在最后位置等待掉落，并优先回收附近金币。
+
+没有合格目标时，掠夺版会退回与拾荒版相同的安全金币路线。
+
+### 3. 危险规避
 
 游戏里黄色 `Drop` 数代表敌人死亡后可能掉落的金币。本脚本以此来分辨僵尸玩家（因为不活跃而被迫加入战场的佬友）和活跃玩家（可能有攻击性），并据此规避潜在危险玩家。
 
@@ -51,38 +67,7 @@ PC 版脚本位于[dist/grasp-rat-gold-runner.user.js](https://github.com/Super-
 
 另外，当触发游戏的 `1h体力限制` 时，也会自动离开。
 
-### 3. 猛攻模式（临时交战前开启）
-
-常态巡航吃金币模式下，脚本会自动规避危险敌人，所以特意为猛攻哥开发了这个战斗辅助模式。
-开启后，金币巡航会暂停，脚本进入战斗辅助状态（此模式依旧支持手动操控）：
-
-- 识别游戏弹体，按弹体起点、方向、速度和游戏 tick（游戏刻）预测轨迹。
-- 选择尽量远离弹道的移动方向，但不会和你的 WASD 手动输入抢控制权。
-- 趁弹体压力较低时，把你和近身敌人的距离拉回 100-150m。
-- 给 170m 内血量低于你的敌人头上画红色倒三角。
-- 血量较低时加重红色呼吸灯提醒。
-- HP 不超过 9 时立即点击“离开”脱战。
-
-战斗中受伤是正常的！所以它不会复用常态巡航的“HP 一掉就逃跑”规则。
-
-### 4. 自动攻击（默认关闭）
-
-- 屏幕左上角为“自动攻击”功能区，支持锁定攻击对象（若未锁定则自动攻击最近&HP最低的敌人）。
-
-- 开启后，脚本会根据目标移动轨迹、距离和估算子弹速度做短时预判。
-- 攻击方法为长按连发覆盖：每组压住鼠标发 5-8 发，让远距离目标附近形成更密的弹幕覆盖（说人话就是更难躲）。
-- `ATTACK BUFFER` 列表会显示 170m 内敌人的用户名、HP 和距离，点击锁定攻击对象！
-
-### 5. 辅助移动方式：“追杀模式”与“一键前往”
-
-地图太大了，对于真人玩家来说跑图真的很累，所以我开发了两种辅助移动模式！
-
-#### 追杀模式
-- 页面的左下角会列出本局游戏中金币数最高的五位玩家，常态每 10 秒刷新；点击用户名会自动复制并填入追杀用户名输入框，然后你可以用“追杀”开关自动追击！
-
-- 支持输入用户名片段并开启“自动追杀”。匹配后会根据目标最近运动轨迹做短时预判并追赶。
-
-#### 一键前往（右键选点）
+### 4. 一键前往（右键选点）
 
 - 你可以在游戏画布上右键单击，设置一个临时前往坐标（类似LOL）。右键目标优先于金币巡航，但低于受伤离开、死亡停止、体力检查和必要的安全规避。
 - 手机端改为长按选点，并在右上角提供“取消目标”按钮。
@@ -107,6 +92,7 @@ grasp-rat-gold-runner/
       mobile.user.js                # 手机端独立源码（IIFE 体，无 metadata 头）
   dist/
     grasp-rat-gold-runner.user.js          # PC 版发布脚本（esbuild 构建）
+    grasp-rat-raider-runner.user.js        # PC 掠夺版发布脚本（同源、构建时选择 profile）
     grasp-rat-gold-runner-mobile.user.js   # 手机端发布脚本（esbuild 构建）
   docs/
     behavior.md                     # 详细行为规则和优先级
@@ -135,6 +121,7 @@ npm run build
 ```powershell
 node --check .\src\entries\desktop.user.js
 node --check .\dist\grasp-rat-gold-runner.user.js
+node --check .\dist\grasp-rat-raider-runner.user.js
 node --check .\src\entries\mobile.user.js
 node --check .\dist\grasp-rat-gold-runner-mobile.user.js
 ```
@@ -151,8 +138,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release-check.ps1
 
 - PC 与手机端是两个独立 userscript，不要为了适配手机去改桌面 HUD。
 - 生命安全高于移动目标。
-- 临时交战高于金币巡航。
-- 自动攻击是独立火控层，不应该改变移动分支。
+- 两个 PC 构建互斥安装，拾荒版永不主动攻击。
+- 掠夺版只攻击策略筛选出的目标，第三方近身威胁仍高于追击。
+- 击杀与金币必须统一评分，并保留切换迟滞，避免来回换目标。
+- 卡住先重规划，重复卡住或网络状态长期不刷新再离开/重连。
 - 连线和倒三角必须使用游戏原生坐标换算，不能按屏幕中心硬猜。
 - Drop 判断只能看黄色 Drop 对应字段，不能用账户金币字段。
 

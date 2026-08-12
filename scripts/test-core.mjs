@@ -98,6 +98,13 @@ test("state-machine: CRUISE 可进 HUNT/COMBAT/LEAVING,不可直接 LEAVING->HUN
   assert.equal(sm.get(), "LEAVING");
 });
 
+test("state-machine: RAID 可在巡航与掠夺闭环之间合法切换", () => {
+  const sm = createStateMachine(RUNNER_STATES.CRUISE);
+  assert.equal(sm.transition(RUNNER_STATES.RAID, "选中击杀收益"), true);
+  assert.equal(sm.get(), "RAID");
+  assert.equal(sm.transition(RUNNER_STATES.CRUISE, "转回金币路线"), true);
+});
+
 test("state-machine: 转移监听器收到 prev/new/reason", () => {
   const sm = createStateMachine(RUNNER_STATES.STANDBY);
   const events = [];

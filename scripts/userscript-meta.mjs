@@ -14,7 +14,18 @@ export const desktopMeta = {
   name: "Grasp Rat Gold Runner",
   namespace: "https://grasp-rat-game.h-e.top/",
   version: pkg.version,
-  description: "Auto collect coin drops with HP-drop leave safety and combat dodge support.",
+  description: "Lightweight scavenger profile: safe coin routes, threat avoidance, stall recovery, and reconnect support.",
+  match: ["https://grasp-rat-game.h-e.top/*", "https://connect.linux.do/oauth2/authorize*"],
+  noframes: true,
+  runAt: "document-end",
+  grant: ["unsafeWindow", "GM_setValue", "GM_getValue", "GM_deleteValue"]
+};
+
+export const raiderMeta = {
+  name: "Grasp Rat Raider Runner",
+  namespace: "https://grasp-rat-game.h-e.top/",
+  version: pkg.version,
+  description: "Raider profile: profitable target pursuit, combat fire, post-kill loot, stall recovery, and reconnect support.",
   match: ["https://grasp-rat-game.h-e.top/*", "https://connect.linux.do/oauth2/authorize*"],
   noframes: true,
   runAt: "document-end",

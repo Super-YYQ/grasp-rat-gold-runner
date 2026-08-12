@@ -63,5 +63,6 @@ npm run capture:baseline
 - `src/entries/desktop.user.js` 是 PC 版开发源文件（IIFE 体，无 metadata 头）。
 - `src/entries/mobile.user.js` 是手机端独立开发源文件（IIFE 体，无 metadata 头）。
 - `dist/grasp-rat-gold-runner.user.js` 是 PC 版发布文件（esbuild 构建）。
+- `dist/grasp-rat-raider-runner.user.js` 是 PC 杀敌掠夺版发布文件（同一桌面源码、构建期 profile）。
 - `dist/grasp-rat-gold-runner-mobile.user.js` 是手机端发布文件（esbuild 构建）。
 - 发布前必须重新 `npm run build`，保证 dist 与源码一致、两次构建哈希一致。
