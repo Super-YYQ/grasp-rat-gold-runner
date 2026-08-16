@@ -93,6 +93,12 @@
     const MANUAL_TARGET_REACHED_CM = 160;
     const MOVE_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"];
 
+    // __SHARED_INLINE__
+    // (build.mjs 在此内联 src/shared + src/strategy 的纯函数,单一真相源)
+    // 注意:必须置于所有顶层立即执行代码(setInterval/waitForGame/setupRunner)之前,
+    // 否则 setupRunner 内对内联区声明的引用会触发 TDZ。
+    // __SHARED_INLINE_END__
+
     if (window[RUNNER_KEY] && typeof window[RUNNER_KEY].destroy === "function") {
       window[RUNNER_KEY].destroy("replaced");
     } else if (window[RUNNER_KEY] && typeof window[RUNNER_KEY].stop === "function") {
@@ -917,9 +923,6 @@
         danger.classList.toggle("critical", !!active && level === "critical");
         root.classList.toggle("danger", !!active);
       }
-    // __SHARED_INLINE__
-    // (build.mjs 在此内联 src/shared + src/strategy 的纯函数,单一真相源)
-    // __SHARED_INLINE_END__
 
       function moveToward(rx, ry, options) {
         const move = steerVector(rx, ry);

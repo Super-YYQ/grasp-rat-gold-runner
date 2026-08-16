@@ -98,13 +98,55 @@ function extractDecls(modulePath) {
   return decls;
 }
 
+// 去除注释(保留字符串/模板/正则字面量内容),避免注释里出现的 "let Foo" 之类文本
+// 被下方声明扫描误判为真实声明。例如 entry 注释 "let RUNNER_STATES 会触发 TDZ"
+// 曾导致 RUNNER_STATES 被当作已声明而跳过内联,运行时 ReferenceError。
+function stripComments(source) {
+  let out = "";
+  let i = 0;
+  let quote = "";
+  while (i < source.length) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (quote) {
+      out += c;
+      if (c === "\\") { out += next || ""; i += 2; continue; }
+      if (c === quote || (quote === "`" && c === "$" && next === "{")) {
+        // 模板字符串里的 ${...} 嵌套由外层扫描继续处理;这里仅闭合当前引号。
+        if (!(quote === "`" && c === "$" && next === "{")) quote = "";
+      }
+      i += 1;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      const nl = source.indexOf("\n", i);
+      i = nl < 0 ? source.length : nl;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      i = end < 0 ? source.length : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      out += c;
+      i += 1;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
 // 收集 esbuild/引擎会合法的标识符名判断:entry 内已声明过的 const/let/function 名。
 // 用于跳过会与 pageMain 已有常量冲突的模块级 const(函数体内引用将解析到 pageMain 同名常量)。
 function declaredNames(entrySource) {
   const names = new Set();
   const re = /(?:const|let|function|class)\s+([A-Za-z_$][\w$]*)/g;
   let m;
-  while ((m = re.exec(entrySource))) names.add(m[1]);
+  while ((m = re.exec(stripComments(entrySource)))) names.add(m[1]);
   return names;
 }
 

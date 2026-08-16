@@ -531,6 +531,894 @@
     function pageMain() {
       "use strict";
       let BUILD_PROFILE = "raider", IS_RAIDER_PROFILE = BUILD_PROFILE === "raider", PROFILE_TAG = IS_RAIDER_PROFILE ? "RAT RAIDER" : "RAT SCAVENGER", RUNNER_KEY = "__codexRatGoldRunner", PANEL_ID = "codex-rat-gold-runner-panel", RICH_ENEMY_MIN_DROP = 10, RICH_ENEMY_SCAN_CM = 25e3, RICH_ENEMY_KEEP_CM = 22e3, RICH_ENEMY_ESCAPE_CM = 17e3, FLEE_ANCHOR_HOLD_MS = 1500, FLEE_ANCHOR_MAX_MS = 3500, FLEE_ANCHOR_SAFE_RADIUS_CM = 19e3, COIN_REACHED_CM = 160, ENEMY_LINE_SCAN_CM = 5e4, ENEMY_LINE_MIN_DROP = 1, COMBAT_SCAN_CM = 17e3, COMBAT_LOW_HP = 9, COMBAT_FAST_CHECK_HP = 22, COMBAT_CRITICAL_HP = 25, COMBAT_DODGE_SCAN_CM = 36e3, COMBAT_DODGE_SPEED_CMPS = 1300, COMBAT_DODGE_SWITCH_MS = 650, COMBAT_SPACING_SCAN_CM = 19e3, COMBAT_RANGE_HARD_MIN_CM = 8500, COMBAT_RANGE_MIN_CM = 1e4, COMBAT_RANGE_IDEAL_CM = 12500, COMBAT_RANGE_MAX_CM = 15e3, COMBAT_CLOSE_PROJECTILE_PRESSURE = 520, CRUISE_DODGE_PRESSURE = 380, CRUISE_DODGE_NEAR_CM = 12e3, CRUISE_DODGE_HOLD_MS = 450, AUTO_FIRE_RANGE_CM = 15e3, AUTO_FIRE_DEFAULT_PROJECTILE_SPEED_CMPS = 1e4, AUTO_FIRE_MAX_RATE_MS = 100, AUTO_FIRE_LOOP_MS = 100, AUTO_FIRE_STAMINA_COST_MILLI = 500, AUTO_FIRE_STAMINA_MAX_MILLI = 1e4, AUTO_FIRE_RESERVE_SHOTS = 2, AUTO_FIRE_LEAD_MIN_MS = 60, AUTO_FIRE_LEAD_MAX_MS = 1150, AUTO_FIRE_BURST_MIN_SHOTS = 5, AUTO_FIRE_BURST_MAX_SHOTS = 8, AUTO_FIRE_BURST_SHOT_MS = AUTO_FIRE_MAX_RATE_MS, PROJECTILE_MEMORY_MS = 1800, MOVING_ENEMY_MEMORY_MS = 1e4, ENEMY_MOVE_EPSILON_CM = 30, LINE_CANVAS_MAX_DPR = 1.75, DROP_CLUSTER_CM = 9e3, ROUTE_CLUSTER_CM = 13e3, ROUTE_LINK_CM = 15e3, ROUTE_MAX_LINK_CM = 22e3, ROUTE_ANCHOR_LIMIT = 22, ROUTE_POOL_LIMIT = 72, ROUTE_MAX_POINTS_DENSE = 6, ROUTE_MAX_POINTS_MID = 4, ROUTE_MAX_POINTS_SPARSE = 2, ROUTE_SWITCH_FACTOR = 1.14, REPLAN_MS = 1800, ROUTE_LENGTH_PENALTY_START_CM = 3e4, ROUTE_LENGTH_PENALTY_PER_CM = 18e-6, ROUTE_LENGTH_PENALTY_FLOOR = 0.5, ROUTE_NEAR_PREFER_CM = 12e3, ROUTE_FAR_SOFT_CM = 35e3, ROUTE_FAR_FACTOR_FLOOR = 0.28, DROP_LEADERBOARD_REFRESH_MS = 1e4, DROP_LEADERBOARD_ENTRY_REFRESH_DELAY_MS = 3e3, STEP_TICK_MS = 150, COMBAT_FAST_TICK_MS = 50, AXIS_DOMINANCE_RATIO = 1.65, TRAVEL_TICK_DIAGONAL_DIV = 35, TRAVEL_TICK_AXIS_DIV = 42, HUNT_REACHED_CM = 260, HUNT_LOST_MEMORY_MS = 12e3, HUNT_PREDICT_MIN_MS = 350, HUNT_PREDICT_MAX_MS = 1300, HUNT_PREDICT_DISTANCE_DIVISOR = 9e3, RAID_REPLAN_MS = 1800, RAID_LOOT_WAIT_MS = 1200, RAID_LOOT_HOLD_MS = 6e3, RAID_LOOT_RADIUS_CM = 2800, WATCHDOG_STALL_MS = 4500, WATCHDOG_STALE_MS = 12e3, WATCHDOG_FALLBACK_RELOAD_MS = 6e3, DANGER_ID = "codex-rat-danger-vignette", MANUAL_TARGET_REACHED_CM = 160, MOVE_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"];
+      function idKey(value) {
+        return value == null ? "" : String(value);
+      }
+      function numberFrom(obj, keys, fallback) {
+        for (let key of keys) {
+          let value = Number(obj && obj[key]);
+          if (Number.isFinite(value)) return value;
+        }
+        return fallback;
+      }
+      function finiteStaminaMs(raw) {
+        if (raw == null || typeof raw == "string" && raw.trim() === "") return null;
+        let value = Number(raw);
+        return Number.isFinite(value) && value >= 0 ? value : null;
+      }
+      function dropAmount(drop) {
+        return Math.max(1, Number(drop && drop.amount || 1));
+      }
+      function readDropAmount(drop) {
+        let value = Number(drop && drop.amount);
+        return Number.isFinite(value) && value > 0 ? value : null;
+      }
+      function minDistanceToEntities(x, y, entities) {
+        let min = 1 / 0;
+        for (let entity of entities || []) {
+          let d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
+          d < min && (min = d);
+        }
+        return min;
+      }
+      function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+        let vx = bx - ax, vy = by - ay;
+        if (!Number.isFinite(vx) || !Number.isFinite(vy)) return 1 / 0;
+        let len2 = vx * vx + vy * vy;
+        if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
+        let t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+        return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+      }
+      function minSegmentThreatDistance(ax, ay, bx, by, threats) {
+        let min = 1 / 0;
+        for (let t of threats || []) {
+          let d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
+          d < min && (min = d);
+        }
+        return min;
+      }
+      function travelTicks(fromX, fromY, toX, toY) {
+        let ax = Math.abs(Number(toX) - Number(fromX)), ay = Math.abs(Number(toY) - Number(fromY));
+        if (!Number.isFinite(ax) || !Number.isFinite(ay)) return 1 / 0;
+        let diagonal = Math.min(ax, ay), axis = Math.max(ax, ay) - diagonal;
+        return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
+      }
+      function travelSeconds(fromX, fromY, toX, toY) {
+        return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
+      }
+      function steerVector(rx, ry) {
+        let ax = Math.abs(rx), ay = Math.abs(ry);
+        return ax < 35 && ay < 35 ? { dx: 0, dy: 0, mode: "stop" } : ay < 35 || ax / Math.max(1, ay) >= AXIS_DOMINANCE_RATIO ? { dx: Math.sign(rx), dy: 0, mode: "x-axis" } : ax < 35 || ay / Math.max(1, ax) >= AXIS_DOMINANCE_RATIO ? { dx: 0, dy: Math.sign(ry), mode: "y-axis" } : { dx: Math.sign(rx), dy: Math.sign(ry), mode: "diagonal" };
+      }
+      function formatClock(ms) {
+        let date = new Date(Number.isFinite(Number(ms)) ? Number(ms) : Date.now()), pad = (value) => String(value).padStart(2, "0");
+        return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+      }
+      function randomEntities(count, maxCoord = 5e5, seed = 1) {
+        let out = [], s = seed >>> 0, rnd = () => (s = s * 1664525 + 1013904223 >>> 0, s / 4294967296);
+        for (let i = 0; i < count; i += 1)
+          out.push({ x: rnd() * maxCoord, y: rnd() * maxCoord });
+        return out;
+      }
+      class SpatialGrid {
+        constructor(cellSize = 9e3) {
+          this.cellSize = cellSize, this.map = /* @__PURE__ */ new Map();
+        }
+        _key(x, y) {
+          return Math.floor(x / this.cellSize) + "," + Math.floor(y / this.cellSize);
+        }
+        clear() {
+          return this.map.clear(), this;
+        }
+        insert(entity) {
+          let k = this._key(Number(entity.x), Number(entity.y)), arr = this.map.get(k);
+          return arr || (arr = [], this.map.set(k, arr)), arr.push(entity), this;
+        }
+        build(entities) {
+          this.clear();
+          for (let e of entities || []) this.insert(e);
+          return this;
+        }
+        /** 返回圆心 (x,y)、半径 r 覆盖的所有格内的实体(未做圆内精筛)。 */
+        cellsRadius(x, y, r) {
+          let cs = this.cellSize, minX = Math.floor((x - r) / cs), maxX = Math.floor((x + r) / cs), minY = Math.floor((y - r) / cs), maxY = Math.floor((y + r) / cs), out = [];
+          for (let cx = minX; cx <= maxX; cx += 1)
+            for (let cy = minY; cy <= maxY; cy += 1) {
+              let arr = this.map.get(cx + "," + cy);
+              arr && arr.length && out.push(...arr);
+            }
+          return out;
+        }
+        /** 半径 r 圆内实体(含精筛)。 */
+        queryRadius(x, y, r) {
+          let r2 = r * r, out = [];
+          for (let e of this.cellsRadius(x, y, r)) {
+            let dx = Number(e.x) - x, dy = Number(e.y) - y;
+            dx * dx + dy * dy <= r2 && out.push(e);
+          }
+          return out;
+        }
+        /** 半径 r 内最近实体;无则 null。 */
+        nearestWithin(x, y, r) {
+          let best = null, bestD = 1 / 0;
+          for (let e of this.cellsRadius(x, y, r)) {
+            let d = Math.hypot(Number(e.x) - x, Number(e.y) - y);
+            d <= r && d < bestD && (bestD = d, best = e);
+          }
+          return best ? { entity: best, dist: bestD } : null;
+        }
+      }
+      function routeFirstLegPreferFactor(firstLegCm) {
+        let dist = Number(firstLegCm) || 0;
+        if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
+        if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
+        let t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
+        return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
+      }
+      function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
+        let safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
+        return safety < RICH_ENEMY_KEEP_CM ? 0 : safety >= RICH_ENEMY_SCAN_CM ? 1 : 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
+      }
+      function routeTurnFactor(prevDx, prevDy, nextDx, nextDy) {
+        let prevLen = Math.hypot(prevDx, prevDy), nextLen = Math.hypot(nextDx, nextDy);
+        if (prevLen < 1 || nextLen < 1) return 1;
+        let cos = (prevDx * nextDx + prevDy * nextDy) / (prevLen * nextLen);
+        return cos < -0.45 ? 0.58 : cos < -0.12 ? 0.76 : cos > 0.72 ? 1.08 : 1;
+      }
+      function buildRouteGrids(candidates, threats, clusterRadius) {
+        let coinGrid = new SpatialGrid(clusterRadius || 9e3).build(candidates || []), threatGrid = new SpatialGrid(13e3).build(threats || []);
+        return { coinGrid, threatGrid, clusterRadius: clusterRadius || 9e3 };
+      }
+      function dropClusterValueGrid(grid, drop, candidatesIndex, radius, weight) {
+        let scanRadius = radius || grid.clusterRadius, valueWeight = weight ?? 0.65, x = Number(drop.x), y = Number(drop.y), selfId = idKey(drop.drop_id), sum = 0;
+        for (let other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
+          if (idKey(other.drop_id) === selfId) continue;
+          let dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
+          dist > scanRadius || (sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight);
+        }
+        return sum;
+      }
+      function routeClusterStatsGrid(grid, drop, radius) {
+        let scanRadius = radius || grid.clusterRadius, x = Number(drop.x), y = Number(drop.y), selfId = idKey(drop.drop_id), count = 0, amount = 0, weighted = 0;
+        for (let other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
+          if (idKey(other.drop_id) === selfId) continue;
+          let dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
+          if (dist > scanRadius) continue;
+          let value = dropAmount(other);
+          count += 1, amount += value, weighted += value * (1 - dist / scanRadius);
+        }
+        return { count, amount, weighted };
+      }
+      function nearestThreatDistGrid(grid, x, y, radius) {
+        let r = radius ?? 25e3, min = 1 / 0;
+        for (let t of grid.threatGrid.queryRadius(x, y, r)) {
+          let d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
+          d < min && (min = d);
+        }
+        return min;
+      }
+      function dropClusterValueBrute(drop, candidates, radius, weight) {
+        let scanRadius = radius || 9e3, valueWeight = weight ?? 0.65, selfId = idKey(drop.drop_id), sum = 0;
+        for (let other of candidates || []) {
+          if (idKey(other.drop_id) === selfId) continue;
+          let dist = Math.hypot(Number(other.x) - Number(drop.x), Number(other.y) - Number(drop.y));
+          dist > scanRadius || (sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight);
+        }
+        return sum;
+      }
+      function nearestThreatDistBrute(x, y, threats, radius) {
+        let r = radius ?? 25e3, min = 1 / 0;
+        for (let t of threats || []) {
+          let d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
+          d <= r && d < min && (min = d);
+        }
+        return min;
+      }
+      function makeRoutePlan(route, snapshotVersion, me) {
+        let coinIds = (route && route.drops ? route.drops : []).map((d) => idKey(d.drop_id));
+        return {
+          id: "route:" + (snapshotVersion || 0) + ":" + (coinIds[0] || "none"),
+          coinIds,
+          score: route ? route.score : 0,
+          value: route ? route.value : 0,
+          travelSeconds: route ? route.travelSeconds : 0,
+          minSafetyCm: route && route.minSafetyFactor != null ? route.minSafetyFactor * 25e3 : 25e3,
+          createdAt: me && me.__now || Date.now(),
+          snapshotVersion: snapshotVersion || 0
+        };
+      }
+      function createArrivalController(opts) {
+        let now = opts && opts.now || (() => Date.now()), confirmMs = opts && opts.confirmMs || 600, maxNudges = opts && opts.maxNudges || 2, blacklistMs = opts && opts.blacklistMs || 8e3, arrivalId = null, arrivedAt = 0, nudges = 0;
+        return {
+          // 每拍调用:areWeAtCoin = 当前是否已贴近某枚金币;coinId = 该金币 id。
+          // 返回 { action: "wait"|"nudge"|"skip"|"move", coinId, nudgeIndex }
+          tick(areWeAtCoin, coinId) {
+            let t = now();
+            if (!areWeAtCoin)
+              return arrivalId = null, arrivedAt = 0, nudges = 0, { action: null };
+            let id = String(coinId);
+            return arrivalId !== id && (arrivalId = id, arrivedAt = t, nudges = 0), t - arrivedAt < confirmMs ? { action: "wait", coinId: id } : nudges < maxNudges ? (nudges += 1, arrivedAt = t, { action: "nudge", coinId: id, nudgeIndex: nudges }) : (arrivalId = null, arrivedAt = 0, nudges = 0, { action: "skip", coinId: id, blacklistMs });
+          },
+          reset() {
+            arrivalId = null, arrivedAt = 0, nudges = 0;
+          },
+          get state() {
+            return { arrivalId, arrivedAt, nudges };
+          }
+        };
+      }
+      function isRichEnemy(enemy, minDrop) {
+        return !!enemy && enemy.dropForAvoid > (minDrop ?? 10);
+      }
+      function isEscapeThreat(enemy, minDrop, movedRecently) {
+        if (!enemy) return !1;
+        let drop = enemy.dropForAvoid;
+        return drop > (minDrop ?? 10) ? !0 : drop <= (minDrop ?? 10) && !!(movedRecently ?? enemy.movedRecently);
+      }
+      function pursuitStatus(enemy, enemyMotion, now) {
+        let key = enemy && enemy.key, motion = key && enemyMotion ? enemyMotion.get(key) : null;
+        if (!motion) return { pursuing: !1, durationMs: 0 };
+        let firstSeenAt = motion.firstSeenAt || motion.lastSeenAt || 0;
+        return {
+          pursuing: now - motion.lastSeenAt <= 1e4,
+          // 最近 10s 内仍见(与 MOVING_ENEMY_MEMORY 一致)
+          durationMs: Math.max(0, now - firstSeenAt)
+        };
+      }
+      function sortByThreat(enemies) {
+        return (enemies || []).filter(Boolean).sort((a, b) => Number(b.dropForAvoid || 0) - Number(a.dropForAvoid || 0) || Number(a.dist) - Number(b.dist));
+      }
+      function nextFleeStage(evade, now, sameEnemy, arrivedAtAnchor, staleAnchor, anchorAvailable, excludeId, holdMs, maxMs) {
+        let hold = holdMs ?? 1500, max = maxMs ?? 3500;
+        if (!sameEnemy || !evade || evade.startedAt == null)
+          return { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+        if (evade.x != null) {
+          if (arrivedAtAnchor || staleAnchor) {
+            let anchor = anchorAvailable ? { x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id } : null;
+            return anchor ? { stage: FLEE_STAGE_ANCHOR, ...anchor, anchorAt: now } : { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+          }
+          return { stage: FLEE_STAGE_ANCHOR, x: evade.x, y: evade.y, drop_id: evade.drop_id, anchorAt: evade.anchorAt };
+        }
+        return now - evade.startedAt >= hold && anchorAvailable ? { stage: FLEE_STAGE_ANCHOR, x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id, anchorAt: now } : { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
+      }
+      function fleeEpisode(fleeing, fleeKey, newKey) {
+        let key = String(newKey || "");
+        return !fleeing || fleeKey && fleeKey !== key ? { countIncrement: 1, fleeing: !0, fleeKey: key } : { countIncrement: 0, fleeing: !0, fleeKey: fleeKey || key };
+      }
+      let FLEE_STAGE_REVERSE = "reverse", FLEE_STAGE_ANCHOR = "anchor";
+      function classifyLeave(reason, hp, noReconnect, criticalHp) {
+        if (noReconnect) return LEAVE_TYPE.OTHER;
+        if (String(reason || "") === "manual") return LEAVE_TYPE.MANUAL;
+        if (/1h体力限制/.test(String(reason || ""))) return LEAVE_TYPE.STAMINA;
+        let h = Number(hp);
+        return Number.isFinite(h) && h <= (criticalHp ?? 25) ? LEAVE_TYPE.LOWHP : LEAVE_TYPE.DAMAGE;
+      }
+      function shouldAutoReconnect(type, autoReconnectOn, noReconnect) {
+        return noReconnect || !autoReconnectOn ? !1 : type === LEAVE_TYPE.DAMAGE || type === LEAVE_TYPE.LOWHP || type === LEAVE_TYPE.STAMINA;
+      }
+      function shouldLeaveOnHpDrop(prevHp, hp, combatMode, alreadyTriggered) {
+        if (combatMode || alreadyTriggered) return !1;
+        let prev = Number(prevHp), cur = Number(hp);
+        return !Number.isFinite(prev) || !Number.isFinite(cur) ? !1 : cur < prev;
+      }
+      let LEAVE_TYPE = {
+        MANUAL: "manual",
+        STAMINA: "stamina",
+        LOWHP: "lowhp",
+        DAMAGE: "damage",
+        OTHER: "other"
+      };
+      function interceptLeadSeconds(me, target, velocity, projectileSpeed, leadMinMs, leadMaxMs) {
+        let rx = Number(target.x) - Number(me.x), ry = Number(target.y) - Number(me.y), vx = Number(velocity.vx) || 0, vy = Number(velocity.vy) || 0, speed = Math.max(1, Number(projectileSpeed) || 1e4), min = (leadMinMs ?? 60) / 1e3, max = (leadMaxMs ?? 1150) / 1e3, a = vx * vx + vy * vy - speed * speed, b = 2 * (rx * vx + ry * vy), c = rx * rx + ry * ry, lead = Math.sqrt(c) / speed;
+        if (Math.abs(a) > 1e-3) {
+          let disc = b * b - 4 * a * c;
+          if (disc >= 0) {
+            let root = Math.sqrt(disc), t1 = (-b - root) / (2 * a), t2 = (-b + root) / (2 * a), positive = [t1, t2].filter((value) => Number.isFinite(value) && value > 0).sort((x, y) => x - y)[0];
+            Number.isFinite(positive) && (lead = positive);
+          }
+        } else if (Math.abs(b) > 1e-3) {
+          let linear = -c / b;
+          Number.isFinite(linear) && linear > 0 && (lead = linear);
+        }
+        return Math.min(max, Math.max(min, lead));
+      }
+      function predictedPoint(target, velocity, leadSeconds) {
+        return {
+          x: Number(target.x) + (Number(velocity.vx) || 0) * leadSeconds,
+          y: Number(target.y) + (Number(velocity.vy) || 0) * leadSeconds,
+          leadSeconds
+        };
+      }
+      function velocityFromHistory(prev, cur, dtMs) {
+        if (!prev || !cur) return { vx: 0, vy: 0 };
+        let dt = Math.max(0.05, (dtMs ?? 0) / 1e3), vx = (Number(cur.x) - Number(prev.x)) / dt, vy = (Number(cur.y) - Number(prev.y)) / dt;
+        return { vx: Number.isFinite(vx) ? vx : 0, vy: Number.isFinite(vy) ? vy : 0 };
+      }
+      function planBurstShots(staminaMs, minShots, maxShots, costPerShotMs, reserveShots) {
+        let min = minShots ?? 5, max = maxShots ?? 8, cost = costPerShotMs ?? 500, reserve = reserveShots ?? 2, s = Number(staminaMs);
+        if (!Number.isFinite(s) || s < 0) return { shots: 0, reason: "stamina-unknown" };
+        let affordable = Math.max(0, Math.floor(s / cost) - reserve);
+        if (affordable < min) return { shots: 0, reason: "insufficient" };
+        let base = min + Math.floor(Math.random() * (max - min + 1));
+        return { shots: Math.min(base, affordable), reason: "ok" };
+      }
+      function planCoverageOffsets(me, target, velocity, count, random) {
+        let rnd = random || Math.random, targetSpeed = Math.hypot(Number(velocity.vx) || 0, Number(velocity.vy) || 0), rx = Number(target.x) - Number(me.x), ry = Number(target.y) - Number(me.y), dist = Math.max(1, Math.hypot(rx, ry)), moveBasis = targetSpeed > 80 ? { x: (Number(velocity.vx) || 0) / targetSpeed, y: (Number(velocity.vy) || 0) / targetSpeed } : { x: rx / dist, y: ry / dist }, perp = { x: -moveBasis.y, y: moveBasis.x }, along = moveBasis, spread = Math.min(980, Math.max(220, dist * 0.038 + targetSpeed * 0.075)), pattern = [0, -0.85, 0.85, -0.42, 0.42, -1.22, 1.22, 0.18], mid = (count - 1) / 2, offsets = [];
+        for (let i = 0; i < count; i += 1) {
+          let lateral = (pattern[i] != null ? pattern[i] : rnd() * 2.3 - 1.15) * spread, forward = (i - mid) * spread * 0.18 + (rnd() * 0.24 - 0.12) * spread;
+          offsets.push({
+            x: perp.x * lateral + along.x * forward,
+            y: perp.y * lateral + along.y * forward
+          });
+        }
+        return offsets;
+      }
+      function selectAutoTarget(enemies, lockedEnemy) {
+        if (lockedEnemy && lockedEnemy.life === "Alive")
+          return { target: lockedEnemy, locked: !0 };
+        let candidates = (enemies || []).filter((e) => e && e.life === "Alive" && Number.isFinite(e.hpForFire) && e.hpForFire > 0);
+        return candidates.length ? { target: candidates.sort(
+          (a, b) => a.hpForFire - b.hpForFire || a.dist - b.dist || String(a.user_id).localeCompare(String(b.user_id))
+        )[0], locked: !1 } : null;
+      }
+      function validateFireTarget(enemy) {
+        if (!enemy) return { ok: !1, reason: "no-target" };
+        if (enemy.life !== "Alive") return { ok: !1, reason: "not-alive" };
+        let hp = Number(enemy.hpForFire);
+        return !Number.isFinite(hp) || hp <= 0 ? { ok: !1, reason: "no-hp" } : { ok: !0, reason: "ok" };
+      }
+      function lockFireRange(lockedEnemy, fireRangeCm) {
+        return lockedEnemy ? {
+          inRange: Number.isFinite(Number(lockedEnemy.dist)) && Number(lockedEnemy.dist) <= fireRangeCm,
+          locked: !0
+        } : { inRange: !1, locked: !1 };
+      }
+      function createFireController(opts) {
+        let setTimeoutFn = opts && opts.setTimeout || ((fn, ms) => setTimeout(fn, ms)), clearTimeoutFn = opts && opts.clearTimeout || ((id) => clearTimeout(id)), getMe = opts && opts.getMe || (() => null), dispatch = opts && opts.dispatch || (() => {
+        }), validateShot = opts && opts.validateShot || (() => ({ ok: !0, reason: "ok" })), shotMs = opts && opts.shotMs || 100, randomDelay = opts && opts.randomDelay || (() => 0), token = 0, timers = [], active = !1, stats = { planned: 0, dispatched: 0, confirmed: null };
+        function clearAll(release) {
+          for (let id of timers) clearTimeoutFn(id);
+          if (timers = [], release && active) {
+            let client = stats.lastClient;
+            client && (dispatch(client, "mouseup", 0), dispatch(client, "click", 0));
+          }
+          active = !1;
+        }
+        return {
+          // 启动一组连发。shots 已由 burst-planner 预算好。
+          // begin(x, y) 派发首发 mousedown;每发前回调 beforeShot(shotIndex) 做校验。
+          startBurst(shots, begin, beforeShot) {
+            let gen = ++token;
+            clearAll(!1), active = !0, stats = { planned: shots, dispatched: 0, confirmed: null };
+            let v0 = validateShot();
+            if (!v0.ok)
+              return active = !1, { ok: !1, reason: v0.reason };
+            let first = begin(0);
+            if (!first)
+              return active = !1, { ok: !1, reason: "no-client" };
+            stats.lastClient = first, stats.dispatched += 1, dispatch(first, "mousemove", 0), dispatch(first, "mousedown", 1);
+            for (let i = 1; i < shots; i += 1) {
+              let id = setTimeoutFn(() => {
+                if (token !== gen || !active) return;
+                let v = validateShot();
+                if (!v.ok)
+                  return clearAll(!0), { ok: !1, reason: v.reason, aborted: !0 };
+                let me = getMe(), client = beforeShot ? beforeShot(i, me) : null;
+                client && (stats.lastClient = client, stats.dispatched += 1, dispatch(client, "mousemove", 1));
+              }, i * shotMs);
+              timers.push(id);
+            }
+            let holdMs = shots * shotMs + randomDelay(), releaseId = setTimeoutFn(() => {
+              if (token !== gen || !active) return;
+              let releaseClient = stats.lastClient;
+              dispatch(releaseClient, "mouseup", 0), dispatch(releaseClient, "click", 0), active = !1, stats.confirmed = null;
+            }, holdMs);
+            return timers.push(releaseId), { ok: !0, reason: "ok" };
+          },
+          // 取消当前连发。release=true 时补发 mouseup/click 让游戏按键复位。
+          cancel(release) {
+            return token += 1, clearAll(!!release), this;
+          },
+          get active() {
+            return active;
+          },
+          get stats() {
+            return { ...stats };
+          }
+        };
+      }
+      function contractPresent2(value, expectation) {
+        return typeof value > "u" || value === null || value === !1 ? !1 : expectation === "function" ? typeof value == "function" : expectation === "array" ? Array.isArray(value) : expectation === "Set-like" ? value && (value instanceof Set || typeof value.add == "function" || typeof value.has == "function" || typeof value.delete == "function") : expectation === "HTMLElement" ? typeof value == "object" && typeof value.getContext == "function" : expectation === "present" ? !0 : expectation === "object" ? typeof value == "object" && !Array.isArray(value) : !0;
+      }
+      function classifyGameContract2(report) {
+        let out = { status: "READY", missing: [], criticalMissing: [], report: {} };
+        for (let [key, expect] of GAME_CONTRACT_REQUIRED) {
+          let value = report ? report[key] : void 0, ok = contractPresent2(value, expect);
+          out.report[key] = ok ? expect : "missing", ok || out.missing.push(key);
+        }
+        for (let [key, expect] of GAME_CONTRACT_OPTIONAL_CRITICAL) {
+          let value = report ? report[key] : void 0, ok = contractPresent2(value, expect);
+          out.report[key] = ok ? expect : "missing", ok || out.criticalMissing.push(key);
+        }
+        return out.missing.length ? out.status = "INCOMPATIBLE" : out.criticalMissing.length ? out.status = "DEGRADED" : out.status = "READY", out;
+      }
+      function buildContractReport(game) {
+        let s = game && game.state, d = game && game.els;
+        return {
+          state: s,
+          "state.entities": s && s.entities,
+          "state.coinDrops": s && s.coinDrops,
+          "state.keys": s && s.keys,
+          "state.currentUserId": s && s.currentUserId,
+          "state.minimap": s && s.minimap ? s.minimap.points : void 0,
+          "state.pointerWorld": s && s.pointerWorld,
+          sendVelocity: game && game.sendVelocity,
+          canvas: d && d.canvas || game.canvas,
+          screenCenter: d && d.screenCenter || game.screenCenter,
+          setPointerFromClient: d && d.setPointerFromClient || game.setPointerFromClient
+        };
+      }
+      function normalizePlayer(raw) {
+        if (!raw || typeof raw != "object") return null;
+        let x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null), y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null);
+        return {
+          id: String(raw.user_id ?? raw.userId ?? raw.uid ?? ""),
+          x,
+          y,
+          hp: numberFrom(raw, ["hp", "health", "life_value", "current_hp"], null),
+          life: raw.life ?? null,
+          name: (raw.name ?? raw.userName ?? raw.username) != null ? String(raw.name ?? raw.userName ?? raw.username) : null,
+          vx: numberFrom(raw, ["vx", "vel_x", "velocity_x", "speed_x"], 0),
+          vy: numberFrom(raw, ["vy", "vel_y", "velocity_y", "speed_y"], 0),
+          drop: numberFrom(raw, ["death_reward_preview", "death_drop_coins"], 0)
+        };
+      }
+      function normalizeCoin(raw) {
+        if (!raw || typeof raw != "object") return null;
+        let x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null), y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null), amount = Number(raw.amount);
+        return {
+          id: String(raw.drop_id ?? raw.coinId ?? raw.id ?? ""),
+          x,
+          y,
+          amount: Number.isFinite(amount) && amount > 0 ? amount : null
+        };
+      }
+      function normalizeProjectile(raw) {
+        return !raw || typeof raw != "object" ? null : {
+          id: String(raw.projectile_id ?? raw.bullet_id ?? raw.shot_id ?? raw.id ?? raw.uid ?? ""),
+          startX: numberFrom(raw, ["start_x", "pos_x", "world_x", "x"], null),
+          startY: numberFrom(raw, ["start_y", "pos_y", "world_y", "y"], null),
+          vx: numberFrom(raw, ["vx", "vel_x", "velocity_x", "speed_x"], 0),
+          vy: numberFrom(raw, ["vy", "vel_y", "velocity_y", "speed_y"], 0),
+          owner: raw.owner_user_id != null ? String(raw.owner_user_id) : null
+        };
+      }
+      function gameStateSnapshot(deps) {
+        let state2 = deps && deps.state, now = deps && deps.now != null ? deps.now : Date.now(), selfId = deps && deps.selfId != null ? String(deps.selfId) : null, snapshot = {
+          now,
+          self: null,
+          players: [],
+          coins: [],
+          projectiles: [],
+          input: { userKeys: [] },
+          contract: { status: "UNKNOWN", missing: [] }
+        }, entities = Array.isArray(state2 && state2.entities) ? state2.entities : [];
+        if (selfId)
+          for (let raw of entities)
+            try {
+              if (raw && String(raw.user_id ?? raw.userId ?? raw.uid) === selfId) {
+                let p = normalizePlayer(raw);
+                p && (snapshot.self = {
+                  ...p,
+                  stamina5sMs: numberFrom(raw, ["stamina_5s_remaining_milli", "stamina5s"], null),
+                  stamina1hMs: numberFrom(raw, ["stamina_1h_remaining_milli", "stamina1h"], null),
+                  balance: numberFrom(raw, ["external_balance_snapshot", "balance"], null)
+                });
+                break;
+              }
+            } catch {
+            }
+        for (let raw of entities)
+          try {
+            let p = normalizePlayer(raw);
+            if (!p || selfId && p.id === selfId) continue;
+            snapshot.players.push(p);
+          } catch {
+          }
+        let coinDrops = Array.isArray(state2 && state2.coinDrops) ? state2.coinDrops : [];
+        for (let raw of coinDrops)
+          try {
+            let c = normalizeCoin(raw);
+            if (!c) continue;
+            snapshot.coins.push(c);
+          } catch {
+          }
+        let keys = state2 && state2.keys;
+        if (keys && typeof keys.has == "function") {
+          let userKeys = [];
+          for (let k of ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"])
+            try {
+              keys.has(k) && userKeys.push(k);
+            } catch {
+            }
+          snapshot.input.userKeys = userKeys;
+        }
+        return snapshot;
+      }
+      function createControlAdapter(deps) {
+        let state2 = deps && deps.state, sendVelocity2 = deps && deps.sendVelocity, scriptMoveKeys = deps && deps.scriptMoveKeys || /* @__PURE__ */ new Set(), findLeaveBtn = deps && deps.findLeaveBtn;
+        function clearScriptKeys() {
+          if (state2 && state2.keys && typeof state2.keys.delete == "function")
+            for (let key of scriptMoveKeys)
+              try {
+                state2.keys.delete(key);
+              } catch {
+              }
+          scriptMoveKeys.clear();
+        }
+        function addKey(key) {
+          if (scriptMoveKeys.add(key), state2 && state2.keys && typeof state2.keys.add == "function")
+            try {
+              state2.keys.add(key);
+            } catch {
+            }
+        }
+        return {
+          move(vector) {
+            let dx = vector && vector.dx ? vector.dx : 0, dy = vector && vector.dy ? vector.dy : 0;
+            if (clearScriptKeys(), dx < 0 && addKey("a"), dx > 0 && addKey("d"), dy < 0 && addKey("w"), dy > 0 && addKey("s"), typeof sendVelocity2 == "function")
+              try {
+                sendVelocity2(!0);
+              } catch {
+              }
+          },
+          stop() {
+            if (clearScriptKeys(), typeof sendVelocity2 == "function")
+              try {
+                sendVelocity2(!0);
+              } catch {
+              }
+          },
+          leave() {
+            if (!findLeaveBtn) return !1;
+            let btn = findLeaveBtn();
+            if (!btn) return !1;
+            try {
+              return btn.click(), !0;
+            } catch {
+              return !1;
+            }
+          },
+          fire(pointer) {
+            return { pointer, ok: !!(pointer && Number.isFinite(pointer.x) && Number.isFinite(pointer.y)) };
+          }
+        };
+      }
+      function gameScreenCenter(rect, screenCenter2) {
+        if (typeof screenCenter2 == "function")
+          try {
+            let point = screenCenter2(), x = Number(point && point.x), y = Number(point && point.y);
+            if (Number.isFinite(x) && Number.isFinite(y))
+              return { x: rect.left + x, y: rect.top + y };
+          } catch {
+          }
+        let reservedLeft = window.matchMedia("(max-aspect-ratio: 1/1)").matches ? 0 : Math.min(368, Math.max(0, rect.width - 320));
+        return {
+          x: rect.left + reservedLeft + (rect.width - reservedLeft) / 2,
+          y: rect.top + rect.height / 2
+        };
+      }
+      function gameCameraCenter(me, localVisual) {
+        let visual = localVisual;
+        return visual && Number.isFinite(Number(visual.x)) && Number.isFinite(Number(visual.y)) ? { x: Number(visual.x), y: Number(visual.y) } : {
+          x: me ? Number(me.x) : 0,
+          y: me ? Number(me.y) : 0
+        };
+      }
+      function fallbackWorldToClient(me, rect, viewRadiusCm, localVisual) {
+        let shortSide = Math.max(1, Math.min(rect.width, rect.height)), viewRadius = Number(viewRadiusCm), units = Number.isFinite(viewRadius) && viewRadius > 0 ? viewRadius * 2 / shortSide : 5e4 * 2 / shortSide, origin = gameScreenCenter(rect), camera = gameCameraCenter(me, localVisual);
+        return (point) => ({
+          x: origin.x + (Number(point.x) - camera.x) / units,
+          y: origin.y + (Number(point.y) - camera.y) / units
+        });
+      }
+      function worldToClientFactory(me, rootRect, deps) {
+        let rect = deps && deps.canvasRect ? deps.canvasRect() : null;
+        if (typeof deps.viewParams == "function" && typeof deps.worldToScreen == "function")
+          try {
+            let view = deps.viewParams();
+            return (point) => {
+              let screenPoint = deps.worldToScreen(Number(point.x), Number(point.y), view);
+              return {
+                x: (rect ? rect.left : 0) + Number(screenPoint.x),
+                y: (rect ? rect.top : 0) + Number(screenPoint.y)
+              };
+            };
+          } catch {
+          }
+        return !rect || rect.width <= 0 || rect.height <= 0 ? fallbackWorldToClient(me, deps.overlayRect || rootRect, deps.viewRadiusCm, deps.localVisual) : fallbackWorldToClient(me, rect, deps.viewRadiusCm, deps.localVisual);
+      }
+      function makeCandidate(type, source, priority, reason, extra) {
+        return Object.assign({
+          type,
+          source,
+          priority,
+          reason,
+          vector: null,
+          // { x, y } 仅在 MOVE 时有效
+          target: null,
+          // { x, y } 世界坐标(导航/逃离用)
+          expiresAt: null
+          // 该动作的过期时刻(可选)
+        }, extra || {});
+      }
+      function candidateNeedsMove(c) {
+        return c && c.type === "MOVE" && c.vector && (c.vector.x !== 0 || c.vector.y !== 0);
+      }
+      let ACTION_PRIORITY = {
+        DEAD: 1e3,
+        // 已死亡/页面离开/实例销毁
+        HP_LEAVE: 950,
+        // 血量下降/低血/小时体力限制
+        REJOIN_SAFETY_LEAVE: 900,
+        // 重连恢复态附近危险或再次掉血
+        USER_MANUAL_INPUT: 850,
+        // 真实 WASD/方向键接管
+        PROJECTILE_DODGE: 800,
+        // 近弹或高压弹道规避
+        THREAT_FLEE: 750,
+        // 危险玩家过近
+        COMBAT_SPACING: 650,
+        // 临时交战距离调节
+        MANUAL_TARGET: 600,
+        // 用户右键/长按目标
+        HUNT_TARGET: 550,
+        // 自动追杀目标
+        COIN_ROUTE: 400,
+        // 金币路线
+        IDLE: 0
+        // 停止移动
+      };
+      function pickAction(candidates) {
+        if (!candidates || !candidates.length)
+          return { type: "STOP", source: "idle", priority: 0, reason: "无动作候选", vector: null, target: null };
+        let best = candidates[0];
+        for (let i = 1; i < candidates.length; i++) {
+          let c = candidates[i];
+          c.priority > best.priority && (best = c);
+        }
+        return best.type === "MOVE" && !best.vector && (best = { ...best, vector: { x: 0, y: 0 } }), best;
+      }
+      function withUserInput(candidates, userKeys) {
+        if (!(Array.isArray(userKeys) && userKeys.length > 0)) return candidates;
+        let rest = (candidates || []).filter((c) => c.source !== "user");
+        return rest.push({
+          type: "MOVE",
+          source: "user",
+          priority: 850,
+          reason: "用户手动输入接管",
+          vector: null,
+          // 由 ControlAdapter 保留用户按键,不清空
+          target: null
+        }), rest;
+      }
+      function createStateMachine(initial) {
+        let state2 = initial || RUNNER_STATES.STANDBY, listeners = [];
+        return {
+          get() {
+            return state2;
+          },
+          is(...names) {
+            return names.includes(state2);
+          },
+          can(target) {
+            return (ALLOWED_TRANSITIONS[state2] || /* @__PURE__ */ new Set()).has(target);
+          },
+          transition(target, reason) {
+            if (target === state2) return !0;
+            if (!this.can(target)) return !1;
+            let prev = state2;
+            state2 = target;
+            for (let fn of listeners)
+              try {
+                fn(prev, state2, reason);
+              } catch {
+              }
+            return !0;
+          },
+          onTransition(fn) {
+            return listeners.push(fn), () => {
+              let i = listeners.indexOf(fn);
+              i >= 0 && listeners.splice(i, 1);
+            };
+          }
+        };
+      }
+      let RUNNER_STATES = {
+        STANDBY: "STANDBY",
+        CRUISE: "CRUISE",
+        RAID: "RAID",
+        HUNT: "HUNT",
+        COMBAT: "COMBAT",
+        REJOIN: "REJOIN",
+        LEAVING: "LEAVING",
+        STOPPED: "STOPPED"
+      }, ALLOWED_TRANSITIONS = {
+        STANDBY: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED"]),
+        CRUISE: /* @__PURE__ */ new Set(["RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+        RAID: /* @__PURE__ */ new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+        HUNT: /* @__PURE__ */ new Set(["CRUISE", "RAID", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+        COMBAT: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
+        REJOIN: /* @__PURE__ */ new Set(["CRUISE", "RAID", "COMBAT", "LEAVING", "STOPPED", "STANDBY"]),
+        LEAVING: /* @__PURE__ */ new Set(["STOPPED", "STANDBY"]),
+        STOPPED: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "STANDBY"])
+      };
+      function createScheduler(inject) {
+        let setInt = inject && inject.setInterval || ((fn, ms) => setInterval(fn, ms)), clearInt = inject && inject.clearInterval || ((id) => clearInterval(id)), now = inject && inject.now || (() => Date.now()), tasks = /* @__PURE__ */ new Map(), timer = 0, driverMs = 50, lastTick = 0, running = !1;
+        function tick() {
+          let t = now();
+          lastTick = t;
+          for (let [name, task] of tasks)
+            if (task.lastRunAt === 0 || t - task.lastRunAt >= task.periodMs) {
+              task.lastRunAt = t;
+              try {
+                task.fn(t);
+              } catch {
+              }
+            }
+        }
+        return {
+          // 注册/更新一个周期任务。periodMs 为最小周期(实际按 driver 粒度触发)。
+          register(name, periodMs, fn) {
+            let p = Math.max(1, Number(periodMs) || 0);
+            tasks.set(name, { periodMs: p, lastRunAt: 0, fn }), p < driverMs && (driverMs = p), running && tasks.size === 1 && (clearInt(timer), timer = setInt(tick, driverMs));
+          },
+          unregister(name) {
+            tasks.delete(name);
+          },
+          start() {
+            if (running) return;
+            running = !0, lastTick = now();
+            let minPeriod = driverMs;
+            for (let t of tasks.values()) minPeriod = Math.min(minPeriod, t.periodMs);
+            driverMs = minPeriod, timer = setInt(tick, driverMs);
+          },
+          stop() {
+            running && (running = !1, clearInt(timer), timer = 0);
+          },
+          has(name) {
+            return tasks.has(name);
+          },
+          count() {
+            return tasks.size;
+          }
+        };
+      }
+      function raidEntityInvincible(entity, now) {
+        if (!entity) return !1;
+        let absolute = Number(entity.invincible_until ?? entity.invulnerable_until ?? entity.invulnerable_until_ms);
+        if (Number.isFinite(absolute) && absolute > Number(now || Date.now())) return !0;
+        let remaining = Number(entity.invuln_remaining_ms ?? entity.invincible_remaining_ms ?? entity.inv);
+        return Number.isFinite(remaining) && remaining > 0;
+      }
+      function classifyRaidCandidate(enemy, motion, me, now, options) {
+        let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, hp = Number(enemy && enemy.hpForFire), drop = Number(enemy && (enemy.dropForAvoid ?? enemy.drop ?? enemy.death_reward_preview ?? enemy.death_drop_coins)), dist = Number(enemy && enemy.dist), selfHp = Number(me && me.hp), base = {
+          ...enemy || {},
+          hpForFire: hp,
+          dropForAvoid: Number.isFinite(drop) ? drop : 0,
+          dist,
+          eligible: !1,
+          kind: "blocked",
+          stationaryMs: 0,
+          reason: "invalid"
+        };
+        if (!enemy || enemy.life !== "Alive") return { ...base, reason: "not-alive" };
+        if (!(hp > 0) || !(drop > 0) || !Number.isFinite(dist) || dist > cfg.maxPursuitCm)
+          return { ...base, reason: "no-value-or-out-of-range" };
+        if (raidEntityInvincible(enemy, now)) return { ...base, reason: "invincible" };
+        let firstSeenAt = Number(motion && motion.firstSeenAt), lastMovedAt = Number(motion && motion.lastMovedAt), stationarySince = Math.max(
+          Number.isFinite(firstSeenAt) && firstSeenAt > 0 ? firstSeenAt : Number(now || 0),
+          Number.isFinite(lastMovedAt) && lastMovedAt > 0 ? lastMovedAt : 0
+        ), stationaryMs = Math.max(0, Number(now || 0) - stationarySince);
+        if (stationaryMs >= cfg.stillMs && drop >= cfg.minAfkDrop)
+          return { ...base, eligible: !0, kind: "afk", stationaryMs, reason: "stationary-drop" };
+        let favorableHp = Number.isFinite(selfHp) && selfHp >= cfg.minSelfHp && (hp <= selfHp * cfg.activeHpRatio || drop >= cfg.activeHighDrop && hp <= selfHp + cfg.activeHighDropHpSlack);
+        return drop >= cfg.minActiveDrop && favorableHp ? { ...base, eligible: !0, kind: "finish", stationaryMs, reason: "favorable-finish" } : { ...base, stationaryMs, reason: "active-risk" };
+      }
+      function scoreRaidCandidate(me, target, options) {
+        let cfg = { ...RAIDER_DEFAULTS, ...options || {} };
+        if (!target || target.eligible === !1) return null;
+        let hp = Number(target.hpForFire), reward = Number(target.dropForAvoid ?? target.drop), dist = Number(target.dist);
+        if (!(hp > 0) || !(reward > 0) || !Number.isFinite(dist)) return null;
+        let shots = Math.max(1, Math.ceil(hp / cfg.damagePerShot)), approachCm = Math.max(0, dist - cfg.holdRangeCm), pickupCm = Math.min(cfg.holdRangeCm, Math.max(0, dist - approachCm)), fireStaminaMs = shots * cfg.shotStaminaMs, totalStaminaMs = approachCm + pickupCm + fireStaminaMs, stamina5s = Number(me && me.stamina_5s_remaining_milli), minimumBurstBudget = (cfg.minBurstShots + cfg.reserveShots) * cfg.shotStaminaMs;
+        if (!Number.isFinite(stamina5s) || stamina5s < minimumBurstBudget) return null;
+        let stamina1h = Number(me && me.stamina_1h_remaining_milli);
+        if (Number.isFinite(stamina1h) && stamina1h < totalStaminaMs + cfg.reserveShots * cfg.shotStaminaMs) return null;
+        let approachSeconds = approachCm / 1e3, fireSeconds = shots * cfg.shotIntervalMs / 1e3, pickupSeconds = pickupCm / 1e3, riskFactor = target.kind === "finish" ? 0.82 : 1, score = reward / (approachSeconds + fireSeconds + pickupSeconds + 1.4) * riskFactor * cfg.killBias;
+        return {
+          kind: "kill",
+          id: String(target.user_id ?? target.id ?? ""),
+          score,
+          reward,
+          shots,
+          totalStaminaMs,
+          approachCm,
+          pickupCm,
+          target
+        };
+      }
+      function chooseProfileOpportunity(coin, kill, held, now, options) {
+        let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, candidates = [coin, kill].filter((item) => item && Number.isFinite(Number(item.score)));
+        if (!candidates.length) return null;
+        candidates.sort((a, b) => Number(b.score) - Number(a.score) || (a.kind === "kill" ? -1 : 1));
+        let best = candidates[0];
+        if (!held) return { ...best, adoptedAt: Number(now || Date.now()) };
+        let heldFresh = candidates.find((item) => item.kind === held.kind && String(item.id) === String(held.id));
+        return heldFresh ? best.kind === heldFresh.kind && String(best.id) === String(heldFresh.id) ? { ...heldFresh, adoptedAt: held.adoptedAt || Number(now || Date.now()) } : Number(best.score) < Number(heldFresh.score) * cfg.switchFactor ? { ...heldFresh, adoptedAt: held.adoptedAt || Number(now || Date.now()) } : { ...best, adoptedAt: Number(now || Date.now()) } : { ...best, adoptedAt: Number(now || Date.now()) };
+      }
+      function raidShouldAbort(me, target, engagementHp, options) {
+        let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, hp = Number(me && me.hp), targetHp = Number(target && target.hpForFire);
+        return !Number.isFinite(hp) || hp <= 0 ? { abort: !0, reason: "self-dead" } : hp <= 25 ? { abort: !0, reason: "critical-hp" } : Number.isFinite(engagementHp) && engagementHp - hp >= 18 ? { abort: !0, reason: "damage-budget" } : target && target.kind === "finish" && Number.isFinite(targetHp) && targetHp > hp * 1.15 ? { abort: !0, reason: "hp-disadvantage" } : Number(me && me.stamina_5s_remaining_milli) < (cfg.reserveShots + 1) * cfg.shotStaminaMs ? { abort: !0, reason: "stamina-reserve" } : { abort: !1, reason: "ok" };
+      }
+      let RAIDER_DEFAULTS = {
+        stillMs: 8e3,
+        recentMoveMs: 1e4,
+        minAfkDrop: 1,
+        minActiveDrop: 3,
+        activeHpRatio: 0.78,
+        activeHighDrop: 15,
+        activeHighDropHpSlack: 5,
+        minSelfHp: 45,
+        fireRangeCm: 15e3,
+        holdRangeCm: 14e3,
+        maxPursuitCm: 5e4,
+        damagePerShot: 3,
+        shotStaminaMs: 500,
+        shotIntervalMs: 100,
+        reserveShots: 2,
+        minBurstShots: 5,
+        switchFactor: 1.15,
+        killBias: 1.18
+      };
+      function createRuntimeWatchdog(options) {
+        let cfg = {
+          stallMs: 4500,
+          staleMs: 12e3,
+          maxRecoveries: 2,
+          progressCm: 80,
+          ...options || {}
+        }, lastX = null, lastY = null, lastTargetKey = "", lastPulse = "", lastProgressAt = null, lastFreshAt = null, recoveries = 0;
+        function reset(now) {
+          lastX = null, lastY = null, lastTargetKey = "", lastPulse = "", lastProgressAt = Number.isFinite(Number(now)) ? Number(now) : null, lastFreshAt = lastProgressAt, recoveries = 0;
+        }
+        return {
+          observe(sample) {
+            let now = Number(sample && sample.now);
+            if (!Number.isFinite(now)) return { action: "none", reason: "invalid-time", recoveries };
+            let active = !!(sample && sample.active), expectedMove = !!(sample && sample.expectedMove), x = Number(sample && sample.x), y = Number(sample && sample.y), targetKey = String(sample && sample.targetKey || ""), pulse = String(sample && sample.pulse || "");
+            if (!active || !Number.isFinite(x) || !Number.isFinite(y))
+              return reset(now), { action: "none", reason: active ? "invalid-position" : "inactive", recoveries: 0 };
+            if (lastProgressAt === null)
+              return lastX = x, lastY = y, lastTargetKey = targetKey, lastPulse = pulse, lastProgressAt = now, lastFreshAt = now, { action: "none", reason: "baseline", recoveries };
+            pulse && pulse !== lastPulse && (lastPulse = pulse, lastFreshAt = now);
+            let staleFor = now - Number(lastFreshAt);
+            if (pulse && staleFor >= cfg.staleMs)
+              return recoveries = cfg.maxRecoveries, lastProgressAt = now, { action: "leave", reason: "state-stale", recoveries, staleFor };
+            if (!expectedMove)
+              return lastX = x, lastY = y, lastTargetKey = targetKey, lastProgressAt = now, recoveries = 0, { action: "none", reason: "idle", recoveries };
+            if (targetKey !== lastTargetKey)
+              return lastTargetKey = targetKey, lastX = x, lastY = y, lastProgressAt = now, recoveries = 0, { action: "none", reason: "target-changed", recoveries };
+            if (Math.hypot(x - Number(lastX), y - Number(lastY)) >= cfg.progressCm)
+              return lastX = x, lastY = y, lastProgressAt = now, recoveries = 0, { action: "none", reason: "progress", recoveries };
+            let stalledFor = now - Number(lastProgressAt);
+            return stalledFor < cfg.stallMs ? { action: "none", reason: "watching", recoveries, stalledFor, staleFor } : (recoveries += 1, lastProgressAt = now, recoveries >= cfg.maxRecoveries ? { action: "leave", reason: "repeated-stall", recoveries, stalledFor, staleFor } : { action: "replan", reason: "movement-stall", recoveries, stalledFor, staleFor });
+          },
+          reset,
+          snapshot() {
+            return { lastProgressAt, lastFreshAt, recoveries, targetKey: lastTargetKey };
+          }
+        };
+      }
       window[RUNNER_KEY] && typeof window[RUNNER_KEY].destroy == "function" ? window[RUNNER_KEY].destroy("replaced") : window[RUNNER_KEY] && typeof window[RUNNER_KEY].stop == "function" && window[RUNNER_KEY].stop("replaced");
       let existingPanel = document.getElementById(PANEL_ID);
       existingPanel && existingPanel.remove();
@@ -1405,840 +2293,6 @@
         function setDanger(active, level) {
           danger.classList.toggle("active", !!active), danger.classList.toggle("critical", !!active && level === "critical"), root.classList.toggle("danger", !!active);
         }
-        function idKey(value) {
-          return value == null ? "" : String(value);
-        }
-        function numberFrom(obj, keys, fallback) {
-          for (let key of keys) {
-            let value = Number(obj && obj[key]);
-            if (Number.isFinite(value)) return value;
-          }
-          return fallback;
-        }
-        function finiteStaminaMs(raw) {
-          if (raw == null || typeof raw == "string" && raw.trim() === "") return null;
-          let value = Number(raw);
-          return Number.isFinite(value) && value >= 0 ? value : null;
-        }
-        function dropAmount(drop) {
-          return Math.max(1, Number(drop && drop.amount || 1));
-        }
-        function readDropAmount(drop) {
-          let value = Number(drop && drop.amount);
-          return Number.isFinite(value) && value > 0 ? value : null;
-        }
-        function minDistanceToEntities(x, y, entities) {
-          let min = 1 / 0;
-          for (let entity of entities || []) {
-            let d = Math.hypot(Number(entity && entity.x) - x, Number(entity && entity.y) - y);
-            d < min && (min = d);
-          }
-          return min;
-        }
-        function pointToSegmentDistance(px, py, ax, ay, bx, by) {
-          let vx = bx - ax, vy = by - ay;
-          if (!Number.isFinite(vx) || !Number.isFinite(vy)) return 1 / 0;
-          let len2 = vx * vx + vy * vy;
-          if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
-          let t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
-          return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-        }
-        function minSegmentThreatDistance(ax, ay, bx, by, threats) {
-          let min = 1 / 0;
-          for (let t of threats || []) {
-            let d = pointToSegmentDistance(Number(t.x), Number(t.y), ax, ay, bx, by);
-            d < min && (min = d);
-          }
-          return min;
-        }
-        function travelTicks(fromX, fromY, toX, toY) {
-          let ax = Math.abs(Number(toX) - Number(fromX)), ay = Math.abs(Number(toY) - Number(fromY));
-          if (!Number.isFinite(ax) || !Number.isFinite(ay)) return 1 / 0;
-          let diagonal = Math.min(ax, ay), axis = Math.max(ax, ay) - diagonal;
-          return diagonal / TRAVEL_TICK_DIAGONAL_DIV + axis / TRAVEL_TICK_AXIS_DIV;
-        }
-        function travelSeconds(fromX, fromY, toX, toY) {
-          return Math.max(0.2, travelTicks(fromX, fromY, toX, toY) * 0.05);
-        }
-        function steerVector(rx, ry) {
-          let ax = Math.abs(rx), ay = Math.abs(ry);
-          return ax < 35 && ay < 35 ? { dx: 0, dy: 0, mode: "stop" } : ay < 35 || ax / Math.max(1, ay) >= AXIS_DOMINANCE_RATIO ? { dx: Math.sign(rx), dy: 0, mode: "x-axis" } : ax < 35 || ay / Math.max(1, ax) >= AXIS_DOMINANCE_RATIO ? { dx: 0, dy: Math.sign(ry), mode: "y-axis" } : { dx: Math.sign(rx), dy: Math.sign(ry), mode: "diagonal" };
-        }
-        function formatClock(ms) {
-          let date = new Date(Number.isFinite(Number(ms)) ? Number(ms) : Date.now()), pad = (value) => String(value).padStart(2, "0");
-          return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
-        }
-        function randomEntities(count, maxCoord = 5e5, seed = 1) {
-          let out = [], s = seed >>> 0, rnd = () => (s = s * 1664525 + 1013904223 >>> 0, s / 4294967296);
-          for (let i = 0; i < count; i += 1)
-            out.push({ x: rnd() * maxCoord, y: rnd() * maxCoord });
-          return out;
-        }
-        class SpatialGrid {
-          constructor(cellSize = 9e3) {
-            this.cellSize = cellSize, this.map = /* @__PURE__ */ new Map();
-          }
-          _key(x, y) {
-            return Math.floor(x / this.cellSize) + "," + Math.floor(y / this.cellSize);
-          }
-          clear() {
-            return this.map.clear(), this;
-          }
-          insert(entity) {
-            let k = this._key(Number(entity.x), Number(entity.y)), arr = this.map.get(k);
-            return arr || (arr = [], this.map.set(k, arr)), arr.push(entity), this;
-          }
-          build(entities) {
-            this.clear();
-            for (let e of entities || []) this.insert(e);
-            return this;
-          }
-          /** 返回圆心 (x,y)、半径 r 覆盖的所有格内的实体(未做圆内精筛)。 */
-          cellsRadius(x, y, r) {
-            let cs = this.cellSize, minX = Math.floor((x - r) / cs), maxX = Math.floor((x + r) / cs), minY = Math.floor((y - r) / cs), maxY = Math.floor((y + r) / cs), out = [];
-            for (let cx = minX; cx <= maxX; cx += 1)
-              for (let cy = minY; cy <= maxY; cy += 1) {
-                let arr = this.map.get(cx + "," + cy);
-                arr && arr.length && out.push(...arr);
-              }
-            return out;
-          }
-          /** 半径 r 圆内实体(含精筛)。 */
-          queryRadius(x, y, r) {
-            let r2 = r * r, out = [];
-            for (let e of this.cellsRadius(x, y, r)) {
-              let dx = Number(e.x) - x, dy = Number(e.y) - y;
-              dx * dx + dy * dy <= r2 && out.push(e);
-            }
-            return out;
-          }
-          /** 半径 r 内最近实体;无则 null。 */
-          nearestWithin(x, y, r) {
-            let best = null, bestD = 1 / 0;
-            for (let e of this.cellsRadius(x, y, r)) {
-              let d = Math.hypot(Number(e.x) - x, Number(e.y) - y);
-              d <= r && d < bestD && (bestD = d, best = e);
-            }
-            return best ? { entity: best, dist: bestD } : null;
-          }
-        }
-        function routeFirstLegPreferFactor(firstLegCm) {
-          let dist = Number(firstLegCm) || 0;
-          if (dist <= ROUTE_NEAR_PREFER_CM) return 1;
-          if (dist >= ROUTE_FAR_SOFT_CM) return ROUTE_FAR_FACTOR_FLOOR;
-          let t = (dist - ROUTE_NEAR_PREFER_CM) / (ROUTE_FAR_SOFT_CM - ROUTE_NEAR_PREFER_CM);
-          return 1 - (1 - ROUTE_FAR_FACTOR_FLOOR) * t;
-        }
-        function routeLegSafetyFactor(fromX, fromY, toX, toY, threats) {
-          let safety = minSegmentThreatDistance(fromX, fromY, toX, toY, threats);
-          return safety < RICH_ENEMY_KEEP_CM ? 0 : safety >= RICH_ENEMY_SCAN_CM ? 1 : 0.55 + 0.45 * ((safety - RICH_ENEMY_KEEP_CM) / (RICH_ENEMY_SCAN_CM - RICH_ENEMY_KEEP_CM));
-        }
-        function routeTurnFactor(prevDx, prevDy, nextDx, nextDy) {
-          let prevLen = Math.hypot(prevDx, prevDy), nextLen = Math.hypot(nextDx, nextDy);
-          if (prevLen < 1 || nextLen < 1) return 1;
-          let cos = (prevDx * nextDx + prevDy * nextDy) / (prevLen * nextLen);
-          return cos < -0.45 ? 0.58 : cos < -0.12 ? 0.76 : cos > 0.72 ? 1.08 : 1;
-        }
-        function buildRouteGrids(candidates, threats, clusterRadius) {
-          let coinGrid = new SpatialGrid(clusterRadius || 9e3).build(candidates || []), threatGrid = new SpatialGrid(13e3).build(threats || []);
-          return { coinGrid, threatGrid, clusterRadius: clusterRadius || 9e3 };
-        }
-        function dropClusterValueGrid(grid, drop, candidatesIndex, radius, weight) {
-          let scanRadius = radius || grid.clusterRadius, valueWeight = weight ?? 0.65, x = Number(drop.x), y = Number(drop.y), selfId = idKey(drop.drop_id), sum = 0;
-          for (let other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
-            if (idKey(other.drop_id) === selfId) continue;
-            let dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
-            dist > scanRadius || (sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight);
-          }
-          return sum;
-        }
-        function routeClusterStatsGrid(grid, drop, radius) {
-          let scanRadius = radius || grid.clusterRadius, x = Number(drop.x), y = Number(drop.y), selfId = idKey(drop.drop_id), count = 0, amount = 0, weighted = 0;
-          for (let other of grid.coinGrid.queryRadius(x, y, scanRadius)) {
-            if (idKey(other.drop_id) === selfId) continue;
-            let dist = Math.hypot(Number(other.x) - x, Number(other.y) - y);
-            if (dist > scanRadius) continue;
-            let value = dropAmount(other);
-            count += 1, amount += value, weighted += value * (1 - dist / scanRadius);
-          }
-          return { count, amount, weighted };
-        }
-        function nearestThreatDistGrid(grid, x, y, radius) {
-          let r = radius ?? 25e3, min = 1 / 0;
-          for (let t of grid.threatGrid.queryRadius(x, y, r)) {
-            let d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
-            d < min && (min = d);
-          }
-          return min;
-        }
-        function dropClusterValueBrute(drop, candidates, radius, weight) {
-          let scanRadius = radius || 9e3, valueWeight = weight ?? 0.65, selfId = idKey(drop.drop_id), sum = 0;
-          for (let other of candidates || []) {
-            if (idKey(other.drop_id) === selfId) continue;
-            let dist = Math.hypot(Number(other.x) - Number(drop.x), Number(other.y) - Number(drop.y));
-            dist > scanRadius || (sum += dropAmount(other) * (1 - dist / scanRadius) * valueWeight);
-          }
-          return sum;
-        }
-        function nearestThreatDistBrute(x, y, threats, radius) {
-          let r = radius ?? 25e3, min = 1 / 0;
-          for (let t of threats || []) {
-            let d = Math.hypot(Number(t.x) - x, Number(t.y) - y);
-            d <= r && d < min && (min = d);
-          }
-          return min;
-        }
-        function makeRoutePlan(route, snapshotVersion, me) {
-          let coinIds = (route && route.drops ? route.drops : []).map((d) => idKey(d.drop_id));
-          return {
-            id: "route:" + (snapshotVersion || 0) + ":" + (coinIds[0] || "none"),
-            coinIds,
-            score: route ? route.score : 0,
-            value: route ? route.value : 0,
-            travelSeconds: route ? route.travelSeconds : 0,
-            minSafetyCm: route && route.minSafetyFactor != null ? route.minSafetyFactor * 25e3 : 25e3,
-            createdAt: me && me.__now || Date.now(),
-            snapshotVersion: snapshotVersion || 0
-          };
-        }
-        function createArrivalController(opts) {
-          let now = opts && opts.now || (() => Date.now()), confirmMs = opts && opts.confirmMs || 600, maxNudges = opts && opts.maxNudges || 2, blacklistMs = opts && opts.blacklistMs || 8e3, arrivalId = null, arrivedAt = 0, nudges = 0;
-          return {
-            // 每拍调用:areWeAtCoin = 当前是否已贴近某枚金币;coinId = 该金币 id。
-            // 返回 { action: "wait"|"nudge"|"skip"|"move", coinId, nudgeIndex }
-            tick(areWeAtCoin, coinId) {
-              let t = now();
-              if (!areWeAtCoin)
-                return arrivalId = null, arrivedAt = 0, nudges = 0, { action: null };
-              let id = String(coinId);
-              return arrivalId !== id && (arrivalId = id, arrivedAt = t, nudges = 0), t - arrivedAt < confirmMs ? { action: "wait", coinId: id } : nudges < maxNudges ? (nudges += 1, arrivedAt = t, { action: "nudge", coinId: id, nudgeIndex: nudges }) : (arrivalId = null, arrivedAt = 0, nudges = 0, { action: "skip", coinId: id, blacklistMs });
-            },
-            reset() {
-              arrivalId = null, arrivedAt = 0, nudges = 0;
-            },
-            get state() {
-              return { arrivalId, arrivedAt, nudges };
-            }
-          };
-        }
-        function isRichEnemy(enemy, minDrop) {
-          return !!enemy && enemy.dropForAvoid > (minDrop ?? 10);
-        }
-        function isEscapeThreat(enemy, minDrop, movedRecently) {
-          if (!enemy) return !1;
-          let drop = enemy.dropForAvoid;
-          return drop > (minDrop ?? 10) ? !0 : drop <= (minDrop ?? 10) && !!(movedRecently ?? enemy.movedRecently);
-        }
-        function pursuitStatus(enemy, enemyMotion, now) {
-          let key = enemy && enemy.key, motion = key && enemyMotion ? enemyMotion.get(key) : null;
-          if (!motion) return { pursuing: !1, durationMs: 0 };
-          let firstSeenAt = motion.firstSeenAt || motion.lastSeenAt || 0;
-          return {
-            pursuing: now - motion.lastSeenAt <= 1e4,
-            // 最近 10s 内仍见(与 MOVING_ENEMY_MEMORY 一致)
-            durationMs: Math.max(0, now - firstSeenAt)
-          };
-        }
-        function sortByThreat(enemies) {
-          return (enemies || []).filter(Boolean).sort((a, b) => Number(b.dropForAvoid || 0) - Number(a.dropForAvoid || 0) || Number(a.dist) - Number(b.dist));
-        }
-        function nextFleeStage(evade, now, sameEnemy, arrivedAtAnchor, staleAnchor, anchorAvailable, excludeId, holdMs, maxMs) {
-          let hold = holdMs ?? 1500, max = maxMs ?? 3500;
-          if (!sameEnemy || !evade || evade.startedAt == null)
-            return { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
-          if (evade.x != null) {
-            if (arrivedAtAnchor || staleAnchor) {
-              let anchor = anchorAvailable ? { x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id } : null;
-              return anchor ? { stage: FLEE_STAGE_ANCHOR, ...anchor, anchorAt: now } : { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
-            }
-            return { stage: FLEE_STAGE_ANCHOR, x: evade.x, y: evade.y, drop_id: evade.drop_id, anchorAt: evade.anchorAt };
-          }
-          return now - evade.startedAt >= hold && anchorAvailable ? { stage: FLEE_STAGE_ANCHOR, x: anchorAvailable.x, y: anchorAvailable.y, drop_id: anchorAvailable.drop_id, anchorAt: now } : { stage: FLEE_STAGE_REVERSE, drop_id: null, x: null, y: null, anchorAt: 0 };
-        }
-        function fleeEpisode(fleeing, fleeKey, newKey) {
-          let key = String(newKey || "");
-          return !fleeing || fleeKey && fleeKey !== key ? { countIncrement: 1, fleeing: !0, fleeKey: key } : { countIncrement: 0, fleeing: !0, fleeKey: fleeKey || key };
-        }
-        let FLEE_STAGE_REVERSE = "reverse", FLEE_STAGE_ANCHOR = "anchor";
-        function classifyLeave(reason, hp, noReconnect, criticalHp) {
-          if (noReconnect) return LEAVE_TYPE.OTHER;
-          if (String(reason || "") === "manual") return LEAVE_TYPE.MANUAL;
-          if (/1h体力限制/.test(String(reason || ""))) return LEAVE_TYPE.STAMINA;
-          let h = Number(hp);
-          return Number.isFinite(h) && h <= (criticalHp ?? 25) ? LEAVE_TYPE.LOWHP : LEAVE_TYPE.DAMAGE;
-        }
-        function shouldAutoReconnect(type, autoReconnectOn, noReconnect) {
-          return noReconnect || !autoReconnectOn ? !1 : type === LEAVE_TYPE.DAMAGE || type === LEAVE_TYPE.LOWHP || type === LEAVE_TYPE.STAMINA;
-        }
-        function shouldLeaveOnHpDrop(prevHp, hp, combatMode, alreadyTriggered) {
-          if (combatMode || alreadyTriggered) return !1;
-          let prev = Number(prevHp), cur = Number(hp);
-          return !Number.isFinite(prev) || !Number.isFinite(cur) ? !1 : cur < prev;
-        }
-        let LEAVE_TYPE = {
-          MANUAL: "manual",
-          STAMINA: "stamina",
-          LOWHP: "lowhp",
-          DAMAGE: "damage",
-          OTHER: "other"
-        };
-        function interceptLeadSeconds(me, target, velocity, projectileSpeed, leadMinMs, leadMaxMs) {
-          let rx = Number(target.x) - Number(me.x), ry = Number(target.y) - Number(me.y), vx = Number(velocity.vx) || 0, vy = Number(velocity.vy) || 0, speed = Math.max(1, Number(projectileSpeed) || 1e4), min = (leadMinMs ?? 60) / 1e3, max = (leadMaxMs ?? 1150) / 1e3, a = vx * vx + vy * vy - speed * speed, b = 2 * (rx * vx + ry * vy), c = rx * rx + ry * ry, lead = Math.sqrt(c) / speed;
-          if (Math.abs(a) > 1e-3) {
-            let disc = b * b - 4 * a * c;
-            if (disc >= 0) {
-              let root2 = Math.sqrt(disc), t1 = (-b - root2) / (2 * a), t2 = (-b + root2) / (2 * a), positive = [t1, t2].filter((value) => Number.isFinite(value) && value > 0).sort((x, y) => x - y)[0];
-              Number.isFinite(positive) && (lead = positive);
-            }
-          } else if (Math.abs(b) > 1e-3) {
-            let linear = -c / b;
-            Number.isFinite(linear) && linear > 0 && (lead = linear);
-          }
-          return Math.min(max, Math.max(min, lead));
-        }
-        function predictedPoint(target, velocity, leadSeconds) {
-          return {
-            x: Number(target.x) + (Number(velocity.vx) || 0) * leadSeconds,
-            y: Number(target.y) + (Number(velocity.vy) || 0) * leadSeconds,
-            leadSeconds
-          };
-        }
-        function velocityFromHistory(prev, cur, dtMs) {
-          if (!prev || !cur) return { vx: 0, vy: 0 };
-          let dt = Math.max(0.05, (dtMs ?? 0) / 1e3), vx = (Number(cur.x) - Number(prev.x)) / dt, vy = (Number(cur.y) - Number(prev.y)) / dt;
-          return { vx: Number.isFinite(vx) ? vx : 0, vy: Number.isFinite(vy) ? vy : 0 };
-        }
-        function planBurstShots(staminaMs, minShots, maxShots, costPerShotMs, reserveShots) {
-          let min = minShots ?? 5, max = maxShots ?? 8, cost = costPerShotMs ?? 500, reserve = reserveShots ?? 2, s = Number(staminaMs);
-          if (!Number.isFinite(s) || s < 0) return { shots: 0, reason: "stamina-unknown" };
-          let affordable = Math.max(0, Math.floor(s / cost) - reserve);
-          if (affordable < min) return { shots: 0, reason: "insufficient" };
-          let base = min + Math.floor(Math.random() * (max - min + 1));
-          return { shots: Math.min(base, affordable), reason: "ok" };
-        }
-        function planCoverageOffsets(me, target, velocity, count, random) {
-          let rnd = random || Math.random, targetSpeed = Math.hypot(Number(velocity.vx) || 0, Number(velocity.vy) || 0), rx = Number(target.x) - Number(me.x), ry = Number(target.y) - Number(me.y), dist = Math.max(1, Math.hypot(rx, ry)), moveBasis = targetSpeed > 80 ? { x: (Number(velocity.vx) || 0) / targetSpeed, y: (Number(velocity.vy) || 0) / targetSpeed } : { x: rx / dist, y: ry / dist }, perp = { x: -moveBasis.y, y: moveBasis.x }, along = moveBasis, spread = Math.min(980, Math.max(220, dist * 0.038 + targetSpeed * 0.075)), pattern = [0, -0.85, 0.85, -0.42, 0.42, -1.22, 1.22, 0.18], mid = (count - 1) / 2, offsets = [];
-          for (let i = 0; i < count; i += 1) {
-            let lateral = (pattern[i] != null ? pattern[i] : rnd() * 2.3 - 1.15) * spread, forward = (i - mid) * spread * 0.18 + (rnd() * 0.24 - 0.12) * spread;
-            offsets.push({
-              x: perp.x * lateral + along.x * forward,
-              y: perp.y * lateral + along.y * forward
-            });
-          }
-          return offsets;
-        }
-        function selectAutoTarget(enemies, lockedEnemy) {
-          if (lockedEnemy && lockedEnemy.life === "Alive")
-            return { target: lockedEnemy, locked: !0 };
-          let candidates = (enemies || []).filter((e) => e && e.life === "Alive" && Number.isFinite(e.hpForFire) && e.hpForFire > 0);
-          return candidates.length ? { target: candidates.sort(
-            (a, b) => a.hpForFire - b.hpForFire || a.dist - b.dist || String(a.user_id).localeCompare(String(b.user_id))
-          )[0], locked: !1 } : null;
-        }
-        function validateFireTarget(enemy) {
-          if (!enemy) return { ok: !1, reason: "no-target" };
-          if (enemy.life !== "Alive") return { ok: !1, reason: "not-alive" };
-          let hp = Number(enemy.hpForFire);
-          return !Number.isFinite(hp) || hp <= 0 ? { ok: !1, reason: "no-hp" } : { ok: !0, reason: "ok" };
-        }
-        function lockFireRange(lockedEnemy, fireRangeCm) {
-          return lockedEnemy ? {
-            inRange: Number.isFinite(Number(lockedEnemy.dist)) && Number(lockedEnemy.dist) <= fireRangeCm,
-            locked: !0
-          } : { inRange: !1, locked: !1 };
-        }
-        function createFireController(opts) {
-          let setTimeoutFn = opts && opts.setTimeout || ((fn, ms) => setTimeout(fn, ms)), clearTimeoutFn = opts && opts.clearTimeout || ((id) => clearTimeout(id)), getMe2 = opts && opts.getMe || (() => null), dispatch = opts && opts.dispatch || (() => {
-          }), validateShot = opts && opts.validateShot || (() => ({ ok: !0, reason: "ok" })), shotMs = opts && opts.shotMs || 100, randomDelay = opts && opts.randomDelay || (() => 0), token = 0, timers = [], active = !1, stats = { planned: 0, dispatched: 0, confirmed: null };
-          function clearAll(release) {
-            for (let id of timers) clearTimeoutFn(id);
-            if (timers = [], release && active) {
-              let client = stats.lastClient;
-              client && (dispatch(client, "mouseup", 0), dispatch(client, "click", 0));
-            }
-            active = !1;
-          }
-          return {
-            // 启动一组连发。shots 已由 burst-planner 预算好。
-            // begin(x, y) 派发首发 mousedown;每发前回调 beforeShot(shotIndex) 做校验。
-            startBurst(shots, begin, beforeShot) {
-              let gen = ++token;
-              clearAll(!1), active = !0, stats = { planned: shots, dispatched: 0, confirmed: null };
-              let v0 = validateShot();
-              if (!v0.ok)
-                return active = !1, { ok: !1, reason: v0.reason };
-              let first = begin(0);
-              if (!first)
-                return active = !1, { ok: !1, reason: "no-client" };
-              stats.lastClient = first, stats.dispatched += 1, dispatch(first, "mousemove", 0), dispatch(first, "mousedown", 1);
-              for (let i = 1; i < shots; i += 1) {
-                let id = setTimeoutFn(() => {
-                  if (token !== gen || !active) return;
-                  let v = validateShot();
-                  if (!v.ok)
-                    return clearAll(!0), { ok: !1, reason: v.reason, aborted: !0 };
-                  let me = getMe2(), client = beforeShot ? beforeShot(i, me) : null;
-                  client && (stats.lastClient = client, stats.dispatched += 1, dispatch(client, "mousemove", 1));
-                }, i * shotMs);
-                timers.push(id);
-              }
-              let holdMs = shots * shotMs + randomDelay(), releaseId = setTimeoutFn(() => {
-                if (token !== gen || !active) return;
-                let releaseClient = stats.lastClient;
-                dispatch(releaseClient, "mouseup", 0), dispatch(releaseClient, "click", 0), active = !1, stats.confirmed = null;
-              }, holdMs);
-              return timers.push(releaseId), { ok: !0, reason: "ok" };
-            },
-            // 取消当前连发。release=true 时补发 mouseup/click 让游戏按键复位。
-            cancel(release) {
-              return token += 1, clearAll(!!release), this;
-            },
-            get active() {
-              return active;
-            },
-            get stats() {
-              return { ...stats };
-            }
-          };
-        }
-        function contractPresent2(value, expectation) {
-          return typeof value > "u" || value === null || value === !1 ? !1 : expectation === "function" ? typeof value == "function" : expectation === "array" ? Array.isArray(value) : expectation === "Set-like" ? value && (value instanceof Set || typeof value.add == "function" || typeof value.has == "function" || typeof value.delete == "function") : expectation === "HTMLElement" ? typeof value == "object" && typeof value.getContext == "function" : expectation === "present" ? !0 : expectation === "object" ? typeof value == "object" && !Array.isArray(value) : !0;
-        }
-        function classifyGameContract2(report) {
-          let out = { status: "READY", missing: [], criticalMissing: [], report: {} };
-          for (let [key, expect] of GAME_CONTRACT_REQUIRED) {
-            let value = report ? report[key] : void 0, ok = contractPresent2(value, expect);
-            out.report[key] = ok ? expect : "missing", ok || out.missing.push(key);
-          }
-          for (let [key, expect] of GAME_CONTRACT_OPTIONAL_CRITICAL) {
-            let value = report ? report[key] : void 0, ok = contractPresent2(value, expect);
-            out.report[key] = ok ? expect : "missing", ok || out.criticalMissing.push(key);
-          }
-          return out.missing.length ? out.status = "INCOMPATIBLE" : out.criticalMissing.length ? out.status = "DEGRADED" : out.status = "READY", out;
-        }
-        function buildContractReport(game) {
-          let s = game && game.state, d = game && game.els;
-          return {
-            state: s,
-            "state.entities": s && s.entities,
-            "state.coinDrops": s && s.coinDrops,
-            "state.keys": s && s.keys,
-            "state.currentUserId": s && s.currentUserId,
-            "state.minimap": s && s.minimap ? s.minimap.points : void 0,
-            "state.pointerWorld": s && s.pointerWorld,
-            sendVelocity: game && game.sendVelocity,
-            canvas: d && d.canvas || game.canvas,
-            screenCenter: d && d.screenCenter || game.screenCenter,
-            setPointerFromClient: d && d.setPointerFromClient || game.setPointerFromClient
-          };
-        }
-        function normalizePlayer(raw) {
-          if (!raw || typeof raw != "object") return null;
-          let x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null), y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null);
-          return {
-            id: String(raw.user_id ?? raw.userId ?? raw.uid ?? ""),
-            x,
-            y,
-            hp: numberFrom(raw, ["hp", "health", "life_value", "current_hp"], null),
-            life: raw.life ?? null,
-            name: (raw.name ?? raw.userName ?? raw.username) != null ? String(raw.name ?? raw.userName ?? raw.username) : null,
-            vx: numberFrom(raw, ["vx", "vel_x", "velocity_x", "speed_x"], 0),
-            vy: numberFrom(raw, ["vy", "vel_y", "velocity_y", "speed_y"], 0),
-            drop: numberFrom(raw, ["death_reward_preview", "death_drop_coins"], 0)
-          };
-        }
-        function normalizeCoin(raw) {
-          if (!raw || typeof raw != "object") return null;
-          let x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], null), y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], null), amount = Number(raw.amount);
-          return {
-            id: String(raw.drop_id ?? raw.coinId ?? raw.id ?? ""),
-            x,
-            y,
-            amount: Number.isFinite(amount) && amount > 0 ? amount : null
-          };
-        }
-        function gameStateSnapshot(deps) {
-          let state2 = deps && deps.state, now = deps && deps.now != null ? deps.now : Date.now(), selfId = deps && deps.selfId != null ? String(deps.selfId) : null, snapshot2 = {
-            now,
-            self: null,
-            players: [],
-            coins: [],
-            projectiles: [],
-            input: { userKeys: [] },
-            contract: { status: "UNKNOWN", missing: [] }
-          }, entities = Array.isArray(state2 && state2.entities) ? state2.entities : [];
-          if (selfId)
-            for (let raw of entities)
-              try {
-                if (raw && String(raw.user_id ?? raw.userId ?? raw.uid) === selfId) {
-                  let p = normalizePlayer(raw);
-                  p && (snapshot2.self = {
-                    ...p,
-                    stamina5sMs: numberFrom(raw, ["stamina_5s_remaining_milli", "stamina5s"], null),
-                    stamina1hMs: numberFrom(raw, ["stamina_1h_remaining_milli", "stamina1h"], null),
-                    balance: numberFrom(raw, ["external_balance_snapshot", "balance"], null)
-                  });
-                  break;
-                }
-              } catch {
-              }
-          for (let raw of entities)
-            try {
-              let p = normalizePlayer(raw);
-              if (!p || selfId && p.id === selfId) continue;
-              snapshot2.players.push(p);
-            } catch {
-            }
-          let coinDrops = Array.isArray(state2 && state2.coinDrops) ? state2.coinDrops : [];
-          for (let raw of coinDrops)
-            try {
-              let c = normalizeCoin(raw);
-              if (!c) continue;
-              snapshot2.coins.push(c);
-            } catch {
-            }
-          let keys = state2 && state2.keys;
-          if (keys && typeof keys.has == "function") {
-            let userKeys = [];
-            for (let k of ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"])
-              try {
-                keys.has(k) && userKeys.push(k);
-              } catch {
-              }
-            snapshot2.input.userKeys = userKeys;
-          }
-          return snapshot2;
-        }
-        function createControlAdapter(deps) {
-          let state2 = deps && deps.state, sendVelocity2 = deps && deps.sendVelocity, scriptMoveKeys = deps && deps.scriptMoveKeys || /* @__PURE__ */ new Set(), findLeaveBtn = deps && deps.findLeaveBtn;
-          function clearScriptKeys() {
-            if (state2 && state2.keys && typeof state2.keys.delete == "function")
-              for (let key of scriptMoveKeys)
-                try {
-                  state2.keys.delete(key);
-                } catch {
-                }
-            scriptMoveKeys.clear();
-          }
-          function addKey(key) {
-            if (scriptMoveKeys.add(key), state2 && state2.keys && typeof state2.keys.add == "function")
-              try {
-                state2.keys.add(key);
-              } catch {
-              }
-          }
-          return {
-            move(vector) {
-              let dx = vector && vector.dx ? vector.dx : 0, dy = vector && vector.dy ? vector.dy : 0;
-              if (clearScriptKeys(), dx < 0 && addKey("a"), dx > 0 && addKey("d"), dy < 0 && addKey("w"), dy > 0 && addKey("s"), typeof sendVelocity2 == "function")
-                try {
-                  sendVelocity2(!0);
-                } catch {
-                }
-            },
-            stop() {
-              if (clearScriptKeys(), typeof sendVelocity2 == "function")
-                try {
-                  sendVelocity2(!0);
-                } catch {
-                }
-            },
-            leave() {
-              if (!findLeaveBtn) return !1;
-              let btn = findLeaveBtn();
-              if (!btn) return !1;
-              try {
-                return btn.click(), !0;
-              } catch {
-                return !1;
-              }
-            },
-            fire(pointer) {
-              return { pointer, ok: !!(pointer && Number.isFinite(pointer.x) && Number.isFinite(pointer.y)) };
-            }
-          };
-        }
-        function makeCandidate(type, source, priority, reason, extra) {
-          return Object.assign({
-            type,
-            source,
-            priority,
-            reason,
-            vector: null,
-            // { x, y } 仅在 MOVE 时有效
-            target: null,
-            // { x, y } 世界坐标(导航/逃离用)
-            expiresAt: null
-            // 该动作的过期时刻(可选)
-          }, extra || {});
-        }
-        function candidateNeedsMove(c) {
-          return c && c.type === "MOVE" && c.vector && (c.vector.x !== 0 || c.vector.y !== 0);
-        }
-        let ACTION_PRIORITY = {
-          DEAD: 1e3,
-          // 已死亡/页面离开/实例销毁
-          HP_LEAVE: 950,
-          // 血量下降/低血/小时体力限制
-          REJOIN_SAFETY_LEAVE: 900,
-          // 重连恢复态附近危险或再次掉血
-          USER_MANUAL_INPUT: 850,
-          // 真实 WASD/方向键接管
-          PROJECTILE_DODGE: 800,
-          // 近弹或高压弹道规避
-          THREAT_FLEE: 750,
-          // 危险玩家过近
-          COMBAT_SPACING: 650,
-          // 临时交战距离调节
-          MANUAL_TARGET: 600,
-          // 用户右键/长按目标
-          HUNT_TARGET: 550,
-          // 自动追杀目标
-          COIN_ROUTE: 400,
-          // 金币路线
-          IDLE: 0
-          // 停止移动
-        };
-        function pickAction(candidates) {
-          if (!candidates || !candidates.length)
-            return { type: "STOP", source: "idle", priority: 0, reason: "无动作候选", vector: null, target: null };
-          let best = candidates[0];
-          for (let i = 1; i < candidates.length; i++) {
-            let c = candidates[i];
-            c.priority > best.priority && (best = c);
-          }
-          return best.type === "MOVE" && !best.vector && (best = { ...best, vector: { x: 0, y: 0 } }), best;
-        }
-        function withUserInput(candidates, userKeys) {
-          if (!(Array.isArray(userKeys) && userKeys.length > 0)) return candidates;
-          let rest = (candidates || []).filter((c) => c.source !== "user");
-          return rest.push({
-            type: "MOVE",
-            source: "user",
-            priority: 850,
-            reason: "用户手动输入接管",
-            vector: null,
-            // 由 ControlAdapter 保留用户按键,不清空
-            target: null
-          }), rest;
-        }
-        function createStateMachine(initial) {
-          let state2 = initial || RUNNER_STATES.STANDBY, listeners = [];
-          return {
-            get() {
-              return state2;
-            },
-            is(...names) {
-              return names.includes(state2);
-            },
-            can(target) {
-              return (ALLOWED_TRANSITIONS[state2] || /* @__PURE__ */ new Set()).has(target);
-            },
-            transition(target, reason) {
-              if (target === state2) return !0;
-              if (!this.can(target)) return !1;
-              let prev = state2;
-              state2 = target;
-              for (let fn of listeners)
-                try {
-                  fn(prev, state2, reason);
-                } catch {
-                }
-              return !0;
-            },
-            onTransition(fn) {
-              return listeners.push(fn), () => {
-                let i = listeners.indexOf(fn);
-                i >= 0 && listeners.splice(i, 1);
-              };
-            }
-          };
-        }
-        let RUNNER_STATES = {
-          STANDBY: "STANDBY",
-          CRUISE: "CRUISE",
-          RAID: "RAID",
-          HUNT: "HUNT",
-          COMBAT: "COMBAT",
-          REJOIN: "REJOIN",
-          LEAVING: "LEAVING",
-          STOPPED: "STOPPED"
-        }, ALLOWED_TRANSITIONS = {
-          STANDBY: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED"]),
-          CRUISE: /* @__PURE__ */ new Set(["RAID", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-          RAID: /* @__PURE__ */ new Set(["CRUISE", "HUNT", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-          HUNT: /* @__PURE__ */ new Set(["CRUISE", "RAID", "COMBAT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-          COMBAT: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "REJOIN", "LEAVING", "STOPPED", "STANDBY"]),
-          REJOIN: /* @__PURE__ */ new Set(["CRUISE", "RAID", "COMBAT", "LEAVING", "STOPPED", "STANDBY"]),
-          LEAVING: /* @__PURE__ */ new Set(["STOPPED", "STANDBY"]),
-          STOPPED: /* @__PURE__ */ new Set(["CRUISE", "RAID", "HUNT", "COMBAT", "REJOIN", "STANDBY"])
-        };
-        function createScheduler(inject) {
-          let setInt = inject && inject.setInterval || ((fn, ms) => setInterval(fn, ms)), clearInt = inject && inject.clearInterval || ((id) => clearInterval(id)), now = inject && inject.now || (() => Date.now()), tasks = /* @__PURE__ */ new Map(), timer = 0, driverMs = 50, lastTick = 0, running = !1;
-          function tick() {
-            let t = now();
-            lastTick = t;
-            for (let [name, task] of tasks)
-              if (task.lastRunAt === 0 || t - task.lastRunAt >= task.periodMs) {
-                task.lastRunAt = t;
-                try {
-                  task.fn(t);
-                } catch {
-                }
-              }
-          }
-          return {
-            // 注册/更新一个周期任务。periodMs 为最小周期(实际按 driver 粒度触发)。
-            register(name, periodMs, fn) {
-              let p = Math.max(1, Number(periodMs) || 0);
-              tasks.set(name, { periodMs: p, lastRunAt: 0, fn }), p < driverMs && (driverMs = p), running && tasks.size === 1 && (clearInt(timer), timer = setInt(tick, driverMs));
-            },
-            unregister(name) {
-              tasks.delete(name);
-            },
-            start() {
-              if (running) return;
-              running = !0, lastTick = now();
-              let minPeriod = driverMs;
-              for (let t of tasks.values()) minPeriod = Math.min(minPeriod, t.periodMs);
-              driverMs = minPeriod, timer = setInt(tick, driverMs);
-            },
-            stop() {
-              running && (running = !1, clearInt(timer), timer = 0);
-            },
-            has(name) {
-              return tasks.has(name);
-            },
-            count() {
-              return tasks.size;
-            }
-          };
-        }
-        function raidEntityInvincible(entity, now) {
-          if (!entity) return !1;
-          let absolute = Number(entity.invincible_until ?? entity.invulnerable_until ?? entity.invulnerable_until_ms);
-          if (Number.isFinite(absolute) && absolute > Number(now || Date.now())) return !0;
-          let remaining = Number(entity.invuln_remaining_ms ?? entity.invincible_remaining_ms ?? entity.inv);
-          return Number.isFinite(remaining) && remaining > 0;
-        }
-        function classifyRaidCandidate(enemy, motion, me, now, options) {
-          let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, hp = Number(enemy && enemy.hpForFire), drop = Number(enemy && (enemy.dropForAvoid ?? enemy.drop ?? enemy.death_reward_preview ?? enemy.death_drop_coins)), dist = Number(enemy && enemy.dist), selfHp = Number(me && me.hp), base = {
-            ...enemy || {},
-            hpForFire: hp,
-            dropForAvoid: Number.isFinite(drop) ? drop : 0,
-            dist,
-            eligible: !1,
-            kind: "blocked",
-            stationaryMs: 0,
-            reason: "invalid"
-          };
-          if (!enemy || enemy.life !== "Alive") return { ...base, reason: "not-alive" };
-          if (!(hp > 0) || !(drop > 0) || !Number.isFinite(dist) || dist > cfg.maxPursuitCm)
-            return { ...base, reason: "no-value-or-out-of-range" };
-          if (raidEntityInvincible(enemy, now)) return { ...base, reason: "invincible" };
-          let firstSeenAt = Number(motion && motion.firstSeenAt), lastMovedAt = Number(motion && motion.lastMovedAt), stationarySince = Math.max(
-            Number.isFinite(firstSeenAt) && firstSeenAt > 0 ? firstSeenAt : Number(now || 0),
-            Number.isFinite(lastMovedAt) && lastMovedAt > 0 ? lastMovedAt : 0
-          ), stationaryMs = Math.max(0, Number(now || 0) - stationarySince);
-          if (stationaryMs >= cfg.stillMs && drop >= cfg.minAfkDrop)
-            return { ...base, eligible: !0, kind: "afk", stationaryMs, reason: "stationary-drop" };
-          let favorableHp = Number.isFinite(selfHp) && selfHp >= cfg.minSelfHp && (hp <= selfHp * cfg.activeHpRatio || drop >= cfg.activeHighDrop && hp <= selfHp + cfg.activeHighDropHpSlack);
-          return drop >= cfg.minActiveDrop && favorableHp ? { ...base, eligible: !0, kind: "finish", stationaryMs, reason: "favorable-finish" } : { ...base, stationaryMs, reason: "active-risk" };
-        }
-        function scoreRaidCandidate(me, target, options) {
-          let cfg = { ...RAIDER_DEFAULTS, ...options || {} };
-          if (!target || target.eligible === !1) return null;
-          let hp = Number(target.hpForFire), reward = Number(target.dropForAvoid ?? target.drop), dist = Number(target.dist);
-          if (!(hp > 0) || !(reward > 0) || !Number.isFinite(dist)) return null;
-          let shots = Math.max(1, Math.ceil(hp / cfg.damagePerShot)), approachCm = Math.max(0, dist - cfg.holdRangeCm), pickupCm = Math.min(cfg.holdRangeCm, Math.max(0, dist - approachCm)), fireStaminaMs = shots * cfg.shotStaminaMs, totalStaminaMs = approachCm + pickupCm + fireStaminaMs, stamina5s = Number(me && me.stamina_5s_remaining_milli), minimumBurstBudget = (cfg.minBurstShots + cfg.reserveShots) * cfg.shotStaminaMs;
-          if (!Number.isFinite(stamina5s) || stamina5s < minimumBurstBudget) return null;
-          let stamina1h = Number(me && me.stamina_1h_remaining_milli);
-          if (Number.isFinite(stamina1h) && stamina1h < totalStaminaMs + cfg.reserveShots * cfg.shotStaminaMs) return null;
-          let approachSeconds = approachCm / 1e3, fireSeconds = shots * cfg.shotIntervalMs / 1e3, pickupSeconds = pickupCm / 1e3, riskFactor = target.kind === "finish" ? 0.82 : 1, score = reward / (approachSeconds + fireSeconds + pickupSeconds + 1.4) * riskFactor * cfg.killBias;
-          return {
-            kind: "kill",
-            id: String(target.user_id ?? target.id ?? ""),
-            score,
-            reward,
-            shots,
-            totalStaminaMs,
-            approachCm,
-            pickupCm,
-            target
-          };
-        }
-        function chooseProfileOpportunity(coin, kill, held, now, options) {
-          let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, candidates = [coin, kill].filter((item) => item && Number.isFinite(Number(item.score)));
-          if (!candidates.length) return null;
-          candidates.sort((a, b) => Number(b.score) - Number(a.score) || (a.kind === "kill" ? -1 : 1));
-          let best = candidates[0];
-          if (!held) return { ...best, adoptedAt: Number(now || Date.now()) };
-          let heldFresh = candidates.find((item) => item.kind === held.kind && String(item.id) === String(held.id));
-          return heldFresh ? best.kind === heldFresh.kind && String(best.id) === String(heldFresh.id) ? { ...heldFresh, adoptedAt: held.adoptedAt || Number(now || Date.now()) } : Number(best.score) < Number(heldFresh.score) * cfg.switchFactor ? { ...heldFresh, adoptedAt: held.adoptedAt || Number(now || Date.now()) } : { ...best, adoptedAt: Number(now || Date.now()) } : { ...best, adoptedAt: Number(now || Date.now()) };
-        }
-        function raidShouldAbort(me, target, engagementHp, options) {
-          let cfg = { ...RAIDER_DEFAULTS, ...options || {} }, hp = Number(me && me.hp), targetHp = Number(target && target.hpForFire);
-          return !Number.isFinite(hp) || hp <= 0 ? { abort: !0, reason: "self-dead" } : hp <= 25 ? { abort: !0, reason: "critical-hp" } : Number.isFinite(engagementHp) && engagementHp - hp >= 18 ? { abort: !0, reason: "damage-budget" } : target && target.kind === "finish" && Number.isFinite(targetHp) && targetHp > hp * 1.15 ? { abort: !0, reason: "hp-disadvantage" } : Number(me && me.stamina_5s_remaining_milli) < (cfg.reserveShots + 1) * cfg.shotStaminaMs ? { abort: !0, reason: "stamina-reserve" } : { abort: !1, reason: "ok" };
-        }
-        let RAIDER_DEFAULTS = {
-          stillMs: 8e3,
-          recentMoveMs: 1e4,
-          minAfkDrop: 1,
-          minActiveDrop: 3,
-          activeHpRatio: 0.78,
-          activeHighDrop: 15,
-          activeHighDropHpSlack: 5,
-          minSelfHp: 45,
-          fireRangeCm: 15e3,
-          holdRangeCm: 14e3,
-          maxPursuitCm: 5e4,
-          damagePerShot: 3,
-          shotStaminaMs: 500,
-          shotIntervalMs: 100,
-          reserveShots: 2,
-          minBurstShots: 5,
-          switchFactor: 1.15,
-          killBias: 1.18
-        };
-        function createRuntimeWatchdog(options) {
-          let cfg = {
-            stallMs: 4500,
-            staleMs: 12e3,
-            maxRecoveries: 2,
-            progressCm: 80,
-            ...options || {}
-          }, lastX = null, lastY = null, lastTargetKey = "", lastPulse = "", lastProgressAt = null, lastFreshAt = null, recoveries = 0;
-          function reset(now) {
-            lastX = null, lastY = null, lastTargetKey = "", lastPulse = "", lastProgressAt = Number.isFinite(Number(now)) ? Number(now) : null, lastFreshAt = lastProgressAt, recoveries = 0;
-          }
-          return {
-            observe(sample) {
-              let now = Number(sample && sample.now);
-              if (!Number.isFinite(now)) return { action: "none", reason: "invalid-time", recoveries };
-              let active = !!(sample && sample.active), expectedMove = !!(sample && sample.expectedMove), x = Number(sample && sample.x), y = Number(sample && sample.y), targetKey = String(sample && sample.targetKey || ""), pulse = String(sample && sample.pulse || "");
-              if (!active || !Number.isFinite(x) || !Number.isFinite(y))
-                return reset(now), { action: "none", reason: active ? "invalid-position" : "inactive", recoveries: 0 };
-              if (lastProgressAt === null)
-                return lastX = x, lastY = y, lastTargetKey = targetKey, lastPulse = pulse, lastProgressAt = now, lastFreshAt = now, { action: "none", reason: "baseline", recoveries };
-              pulse && pulse !== lastPulse && (lastPulse = pulse, lastFreshAt = now);
-              let staleFor = now - Number(lastFreshAt);
-              if (pulse && staleFor >= cfg.staleMs)
-                return recoveries = cfg.maxRecoveries, lastProgressAt = now, { action: "leave", reason: "state-stale", recoveries, staleFor };
-              if (!expectedMove)
-                return lastX = x, lastY = y, lastTargetKey = targetKey, lastProgressAt = now, recoveries = 0, { action: "none", reason: "idle", recoveries };
-              if (targetKey !== lastTargetKey)
-                return lastTargetKey = targetKey, lastX = x, lastY = y, lastProgressAt = now, recoveries = 0, { action: "none", reason: "target-changed", recoveries };
-              if (Math.hypot(x - Number(lastX), y - Number(lastY)) >= cfg.progressCm)
-                return lastX = x, lastY = y, lastProgressAt = now, recoveries = 0, { action: "none", reason: "progress", recoveries };
-              let stalledFor = now - Number(lastProgressAt);
-              return stalledFor < cfg.stallMs ? { action: "none", reason: "watching", recoveries, stalledFor, staleFor } : (recoveries += 1, lastProgressAt = now, recoveries >= cfg.maxRecoveries ? { action: "leave", reason: "repeated-stall", recoveries, stalledFor, staleFor } : { action: "replan", reason: "movement-stall", recoveries, stalledFor, staleFor });
-            },
-            reset,
-            snapshot() {
-              return { lastProgressAt, lastFreshAt, recoveries, targetKey: lastTargetKey };
-            }
-          };
-        }
         function moveToward(rx, ry, options) {
           let move = steerVector(rx, ry);
           return setVelocity(move.dx, move.dy, options), runner.lastMoveMode = move.mode, move;
@@ -2635,7 +2689,7 @@
             vy: dy * speedPerSecond
           };
         }
-        function normalizeProjectile(raw, previous, now) {
+        function normalizeProjectile2(raw, previous, now) {
           let kinematic = projectileFromKinematics(raw);
           if (kinematic) return kinematic;
           let x = numberFrom(raw, ["x", "pos_x", "world_x", "cx"], NaN), y = numberFrom(raw, ["y", "pos_y", "world_y", "cy"], NaN);
@@ -2657,7 +2711,7 @@
               if (Number.isFinite(owner) && idKey(owner) === idKey(state.currentUserId)) return;
               let key = projectileKey(raw, source.name, index);
               if (seen.has(key)) return;
-              let previous = runner.projectileMotion.get(key), normalized = normalizeProjectile(raw, previous, now);
+              let previous = runner.projectileMotion.get(key), normalized = normalizeProjectile2(raw, previous, now);
               if (!normalized) return;
               let dist = Math.hypot(normalized.x - Number(me.x), normalized.y - Number(me.y));
               !Number.isFinite(dist) || dist > COMBAT_DODGE_SCAN_CM || (runner.projectileMotion.set(key, {
@@ -2829,7 +2883,7 @@
           return ratio >= 0.65 ? Math.max(90, randomBetween(120, 260) + farBias + shotBias) : ratio >= 0.35 ? Math.max(120, randomBetween(240, 520) + farBias + shotBias) : ratio >= 0.16 ? Math.max(180, randomBetween(430, 760) + farBias + shotBias) : randomBetween(620, 980) + shotBias;
         }
         function autoFireClientPoint(me, point) {
-          let client = worldToClientFactory(me, root.getBoundingClientRect())(point), x = Number(client && client.x), y = Number(client && client.y);
+          let client = worldToClientFactory2(me, root.getBoundingClientRect())(point), x = Number(client && client.x), y = Number(client && client.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
           let rect = canvasRect(), margin = 4;
           return x < rect.left - margin || x > rect.right + margin || y < rect.top - margin || y > rect.bottom + margin ? null : { x, y };
@@ -3301,7 +3355,7 @@
           }
           return point;
         }
-        function gameScreenCenter(rect) {
+        function gameScreenCenter2(rect) {
           if (typeof screenCenter == "function")
             try {
               let point = screenCenter(), x = Number(point && point.x), y = Number(point && point.y);
@@ -3315,21 +3369,21 @@
             y: rect.top + rect.height / 2
           };
         }
-        function gameCameraCenter(me) {
+        function gameCameraCenter2(me) {
           let visual = state.localVisual;
           return visual && Number.isFinite(Number(visual.x)) && Number.isFinite(Number(visual.y)) ? { x: Number(visual.x), y: Number(visual.y) } : {
             x: Number(me.x),
             y: Number(me.y)
           };
         }
-        function fallbackWorldToClient(me, rect) {
-          let shortSide = Math.max(1, Math.min(rect.width, rect.height)), viewRadius = Number(state.viewRadiusCm), units = Number.isFinite(viewRadius) && viewRadius > 0 ? viewRadius * 2 / shortSide : ENEMY_LINE_SCAN_CM * 2 / shortSide, origin = gameScreenCenter(rect), camera = gameCameraCenter(me);
+        function fallbackWorldToClient2(me, rect) {
+          let shortSide = Math.max(1, Math.min(rect.width, rect.height)), viewRadius = Number(state.viewRadiusCm), units = Number.isFinite(viewRadius) && viewRadius > 0 ? viewRadius * 2 / shortSide : ENEMY_LINE_SCAN_CM * 2 / shortSide, origin = gameScreenCenter2(rect), camera = gameCameraCenter2(me);
           return (point) => ({
             x: origin.x + (Number(point.x) - camera.x) / units,
             y: origin.y + (Number(point.y) - camera.y) / units
           });
         }
-        function worldToClientFactory(me, rootRect) {
+        function worldToClientFactory2(me, rootRect) {
           let rect = canvasRect();
           if (typeof viewParams == "function" && typeof worldToScreen == "function")
             try {
@@ -3343,7 +3397,7 @@
               };
             } catch {
             }
-          return !rect || rect.width <= 0 || rect.height <= 0 ? fallbackWorldToClient(me, overlaySceneRect(rootRect)) : fallbackWorldToClient(me, rect);
+          return !rect || rect.width <= 0 || rect.height <= 0 ? fallbackWorldToClient2(me, overlaySceneRect(rootRect)) : fallbackWorldToClient2(me, rect);
         }
         function clientPoint(worldPoint, toClient, rootRect) {
           let clientPoint2 = toClient(renderWorldPoint(worldPoint)), x = Number(clientPoint2.x) - rootRect.left, y = Number(clientPoint2.y) - rootRect.top;
@@ -3428,7 +3482,7 @@
             }
             let surface = prepareLineCanvas(rootRect);
             if (!surface) return;
-            let toClient = worldToClientFactory(me, rootRect), mePoint = clientPoint(me, toClient, rootRect);
+            let toClient = worldToClientFactory2(me, rootRect), mePoint = clientPoint(me, toClient, rootRect);
             if (!mePoint) return;
             if (runner.combatMode) {
               drawCombatOverlay(surface, me, toClient, rootRect);
